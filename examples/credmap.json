@@ -1,0 +1,10 @@
+{
+  "map": {
+    "10.66.1.0/24": "Cred-CoreSwitch",
+    "10.66.10.0/24": "Cred-Servers",
+    "Default": "Cred-ReadOnly"
+  },
+  "snmp": {
+    "10.66.0.0/16": {"version": "v2c", "communitySecret": "Snmp-Comm-Internal"}
+  }
+}

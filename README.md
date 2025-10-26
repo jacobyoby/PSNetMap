@@ -63,7 +63,7 @@ That's it! The wizard automatically:
 
 ```powershell
 # Import the module
-Import-Module .\src\NetDiagram-PS.psd1
+Import-Module .\NetDiagram-PS\NetDiagram-PS.psd1
 
 # Create your inventory file (copy from examples/inventory-template.json)
 # Edit it with your devices
@@ -76,7 +76,7 @@ $topo | Export-DrawIO -OutFile '.\my-network.drawio'
 ### Method 3: With SNMP Discovery (Advanced)
 
 ```powershell
-Import-Module .\src\NetDiagram-PS.psd1
+Import-Module .\NetDiagram-PS\NetDiagram-PS.psd1
 
 # 1. Store SNMP community string securely
 Install-Module Microsoft.PowerShell.SecretManagement
@@ -210,7 +210,7 @@ $inventory = @{
 $inventory | ConvertTo-Json | Out-File my-servers.json
 
 # Generate diagram
-Import-Module .\src\NetDiagram-PS.psd1
+Import-Module .\NetDiagram-PS\NetDiagram-PS.psd1
 Import-Inventory my-servers.json | Export-DrawIO -OutFile servers.drawio
 ```
 
@@ -348,7 +348,7 @@ This project is provided as-is for educational and professional use.
 notepad my-network-inventory.json
 
 # Re-generate with your changes:
-Import-Module .\src\NetDiagram-PS.psd1
+Import-Module .\NetDiagram-PS\NetDiagram-PS.psd1
 Import-Inventory my-network-inventory.json | Export-DrawIO -OutFile my-network.drawio
 ```
 

@@ -1,10 +1,22 @@
 {
+  "_comment": "Template: Replace IPs and secret names with your own values",
   "map": {
-    "10.66.1.0/24": "Cred-CoreSwitch",
-    "10.66.10.0/24": "Cred-Servers",
-    "Default": "Cred-ReadOnly"
+    "192.168.1.0/24": "YourCredentialName",
+    "Default": "ReadOnlyCredential"
   },
   "snmp": {
-    "10.66.0.0/16": {"version": "v2c", "communitySecret": "Snmp-Comm-Internal"}
+    "192.168.1.0/24": {
+      "version": "v2c",
+      "communitySecret": "YourSNMPSecretName"
+    },
+    "Default": {
+      "version": "v2c",
+      "communitySecret": "PublicSNMPSecret"
+    }
+  },
+  "_instructions": {
+    "setup": "1. Install: Install-Module Microsoft.PowerShell.SecretManagement",
+    "store_secret": "2. Store secrets: Set-Secret -Name 'YourSNMPSecretName' -Secret 'your-community-string'",
+    "usage": "3. Use: Get-SnmpNeighbors -CredentialMapPath .\\examples\\credmap.json"
   }
 }

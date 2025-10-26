@@ -1,0 +1,39 @@
+{
+  "knownDevices": [
+    {
+      "ip": "192.168.1.1",
+      "hostname": "my-router",
+      "role": "router",
+      "vendor": "Cisco",
+      "os": "IOS 15.x"
+    },
+    {
+      "ip": "192.168.1.10",
+      "hostname": "my-switch",
+      "role": "switch",
+      "vendor": "Cisco",
+      "os": "IOS 15.x"
+    },
+    {
+      "ip": "192.168.1.100",
+      "hostname": "my-server",
+      "role": "server",
+      "vendor": "Dell",
+      "os": "Ubuntu 22.04"
+    },
+    {
+      "ip": "192.168.1.200",
+      "hostname": "my-workstation",
+      "role": "workstation",
+      "vendor": "HP",
+      "os": "Windows 11"
+    }
+  ],
+  "subnets": [
+    {
+      "cidr": "192.168.1.0/24",
+      "label": "Main Network",
+      "vlan": 1
+    }
+  ]
+}

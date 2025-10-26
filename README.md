@@ -1,48 +1,366 @@
 # NetDiagram-PS
 
-NetDiagram-PS is a PowerShell 7+ module that builds simple network topology diagrams and metadata from an inventory. The module can discover reachability, merge link information, and export Draw.io diagrams without external APIs.
+**Automatically discover your network and create professional diagrams in seconds.**
 
-## Prerequisites
+A PowerShell 7+ module that discovers your network topology and generates beautiful draw.io diagrams with Cisco network icons, subnet containers, and professional styling.
 
-- PowerShell 7.0 or newer
-- Optional: `snmpwalk.exe` from the Net-SNMP toolkit (if you want LLDP/CDP discovery)
-- Optional: [Microsoft.PowerShell.SecretManagement](https://learn.microsoft.com/powershell/module/microsoft.powershell.secretmanagement/) for credential resolution
+---
 
-## Installation
+## 🚀 Quick Start (30 seconds)
 
-```powershell
-Import-Module (Join-Path $PSScriptRoot 'src' 'NetDiagram-PS.psd1')
-```
-
-## Quickstart
+**Just want a diagram of YOUR network?** Run this:
 
 ```powershell
-$topology = Import-Inventory ./examples/baseline.json |
-            Test-DeviceReachability -MaxParallel 64
-$topology.Edges = @(
-    [pscustomobject]@{ SourceIP='10.66.1.1'; TargetIP='10.66.10.11'; Label='Gi0/1'; Source='Manual' },
-    [pscustomobject]@{ SourceIP='10.66.1.1'; TargetIP='10.66.1.2'; Label='VPC'; Source='Manual' }
-)
-$topology | Export-DrawIO -OutFile ./network.drawio
+# 1. Download/clone this repo
+cd PSNetMap
+
+# 2. Run the wizard
+.\New-NetworkDiagram.ps1
+
+# 3. Open my-network.drawio in draw.io!
 ```
 
-### With SNMP
+That's it! The wizard automatically:
+- ✅ Discovers your network configuration
+- ✅ Scans for active devices
+- ✅ Tests connectivity
+- ✅ Generates a professional diagram
+- ✅ Saves an inventory file you can edit
+
+---
+
+## 📋 Prerequisites
+
+- **PowerShell 7.0+** (required)
+  - Windows: https://aka.ms/powershell
+  - Already installed? Check with: `$PSVersionTable.PSVersion`
+
+- **net-snmp tools** (optional, for SNMP discovery)
+  - Windows: `choco install net-snmp`
+  - Linux: `apt install snmp`
+
+- **Pester 5.0+** (optional, only for running tests)
+  - Install: `Install-Module -Name Pester -MinimumVersion 5.0.0`
+
+---
+
+## 📖 Usage
+
+### Method 1: Quick Start Wizard (Easiest)
 
 ```powershell
-$topology = Import-Inventory ./examples/baseline.json |
-            Test-DeviceReachability
-$topology = $topology | Get-SnmpNeighbors -CredentialMap ./examples/credmap.json
-$topology | Export-Metadata -OutFile ./scanmeta.json -CredSetsUsed @('Cred-CoreSwitch','Snmp-Comm-Internal')
+# Quick scan (common IPs only, ~10 seconds)
+.\New-NetworkDiagram.ps1
+
+# Medium scan (first 50 IPs, ~30 seconds)
+.\New-NetworkDiagram.ps1 -ScanDepth Medium
+
+# Full scan (all 254 IPs, ~2 minutes)
+.\New-NetworkDiagram.ps1 -ScanDepth Full -OutputPath .\office-network.drawio
 ```
 
-## Tests
+### Method 2: Manual Workflow (More Control)
 
 ```powershell
-Invoke-Pester -Path ./tests/NetDiagram.Tests.ps1
+# Import the module
+Import-Module .\src\NetDiagram-PS.psd1
+
+# Create your inventory file (copy from examples/inventory-template.json)
+# Edit it with your devices
+
+# Generate diagram
+$topo = Import-Inventory -Path '.\my-inventory.json'
+$topo | Export-DrawIO -OutFile '.\my-network.drawio'
 ```
 
-## Troubleshooting
+### Method 3: With SNMP Discovery (Advanced)
 
-- **Draw.io cannot open the file**: Ensure `<mxCell id="0"/>` and `<mxCell id="1" parent="0"/>` exist and that all other cells reference `parent="1"`.
-- **SNMP discovery returns nothing**: Verify the SNMP community secret, device ACLs, SNMP version, and that `snmpwalk.exe` is on the PATH.
-- **Ping or SNMP time out**: Adjust throttle limits or verify device reachability. The module uses conservative timeouts and skips unreachable nodes instead of failing.
+```powershell
+Import-Module .\src\NetDiagram-PS.psd1
+
+# 1. Store SNMP community string securely
+Install-Module Microsoft.PowerShell.SecretManagement
+Register-SecretVault -Name LocalVault -ModuleName Microsoft.PowerShell.SecretStore
+Set-Secret -Name 'MySNMPCommunity' -Secret 'public'
+
+# 2. Create credential map (copy examples/credmap.json and edit)
+
+# 3. Discover topology with SNMP
+$topo = Import-Inventory -Path '.\my-inventory.json'
+$topo = $topo | Get-SnmpNeighbors -CredentialMapPath '.\my-credmap.json'
+$topo | Export-DrawIO -OutFile '.\network.drawio'
+```
+
+---
+
+## 📁 Inventory File Format
+
+Create a JSON file with your network devices:
+
+```json
+{
+  "knownDevices": [
+    {
+      "ip": "192.168.1.1",
+      "hostname": "my-router",
+      "role": "router",
+      "vendor": "Cisco",
+      "os": "IOS 15.x"
+    },
+    {
+      "ip": "192.168.1.100",
+      "hostname": "my-server",
+      "role": "server",
+      "vendor": "Dell",
+      "os": "Ubuntu 22.04"
+    }
+  ],
+  "subnets": [
+    {
+      "cidr": "192.168.1.0/24",
+      "label": "Main Network",
+      "vlan": 1
+    }
+  ]
+}
+```
+
+**Supported Roles:** `router`, `core-router`, `distribution`, `switch`, `server`, `workstation`
+
+See `examples/inventory-template.json` for a complete template.
+
+---
+
+## 🎨 Diagram Features
+
+Your diagrams include:
+
+- ✨ **Cisco Network Icons** - Professional symbols for routers, switches, servers
+- 📦 **Subnet Containers** - Visual grouping by network segment
+- 🎯 **Color-Coded Status** - Green (reachable), Red (unreachable), Gray (unknown)
+- 🔗 **Smart Connectors** - Orthogonal routing with rounded corners
+- 📊 **Confidence Levels** - Solid lines (L2-SNMP verified), Dashed (L3-Inferred)
+- 🏷️ **Clear Labels** - Device names, IPs, and connection details
+- 📏 **Hierarchical Layout** - Automatic positioning by network layer
+
+### Example Output
+
+```
+┌─────────────────────────────────────┐
+│ Subnet: 192.168.1.0/24             │
+│                                     │
+│   ┌─────────┐         ┌─────────┐ │
+│   │ Router  │─────────│ Switch  │ │
+│   │ .1      │         │ .10     │ │
+│   └─────────┘         └─────────┘ │
+│        │                   │       │
+│   ┌─────────┐         ┌─────────┐ │
+│   │ Server  │         │   PC    │ │
+│   │ .100    │         │ .200    │ │
+│   └─────────┘         └─────────┘ │
+└─────────────────────────────────────┘
+```
+
+---
+
+## 🔧 Available Commands
+
+After importing the module, you have access to:
+
+| Command | Purpose |
+|---------|---------|
+| `Import-Inventory` | Load network inventory from JSON |
+| `Test-DeviceReachability` | Ping test all devices in parallel |
+| `Get-SnmpNeighbors` | Discover connections via SNMP |
+| `Merge-Edges` | Combine and deduplicate connections |
+| `Export-DrawIO` | Generate diagram file |
+| `Export-Metadata` | Save scan statistics |
+| `Compare-NetworkScans` | Diff two topology snapshots |
+| `Invoke-SnmpWalk` | Direct SNMP queries |
+
+Get help on any command:
+```powershell
+Get-Help Export-DrawIO -Full
+```
+
+---
+
+## 📝 Common Workflows
+
+### 1. Diagram Your Current Network
+
+```powershell
+# One command - done!
+.\New-NetworkDiagram.ps1
+```
+
+### 2. Document Server Infrastructure
+
+```powershell
+# Create inventory file with your servers
+$inventory = @{
+    knownDevices = @(
+        @{ ip='10.0.0.10'; hostname='db-server'; role='server'; vendor='Dell' }
+        @{ ip='10.0.0.20'; hostname='web-server'; role='server'; vendor='HP' }
+    )
+    subnets = @(
+        @{ cidr='10.0.0.0/24'; label='DMZ'; vlan=10 }
+    )
+}
+$inventory | ConvertTo-Json | Out-File my-servers.json
+
+# Generate diagram
+Import-Module .\src\NetDiagram-PS.psd1
+Import-Inventory my-servers.json | Export-DrawIO -OutFile servers.drawio
+```
+
+### 3. Compare Network Changes
+
+```powershell
+# Save baseline
+$baseline = Import-Inventory old-network.json
+$baseline | ConvertTo-Json | Out-File baseline-topo.json
+$baseline | Export-Metadata -OutFile baseline-meta.json
+
+# Save current state
+$current = Import-Inventory current-network.json
+$current | ConvertTo-Json | Out-File current-topo.json
+$current | Export-Metadata -OutFile current-meta.json
+
+# Compare
+Compare-NetworkScans `
+    -BaselineMetadata baseline-meta.json `
+    -BaselineTopology baseline-topo.json `
+    -CurrentMetadata current-meta.json `
+    -CurrentTopology current-topo.json `
+    -OutFile network-changes.md
+```
+
+---
+
+## 🎓 Examples
+
+Check the `examples/` directory:
+
+- `inventory-template.json` - Template for creating your inventory
+- `credmap.json` - Template for SNMP credentials
+
+---
+
+## ❓ Troubleshooting
+
+### "No devices found during scan"
+
+**Cause:** Firewall blocking ICMP (ping)
+
+**Solutions:**
+- Run from an administrator/elevated PowerShell
+- Disable Windows Firewall temporarily
+- Manually create inventory file with known IPs
+
+### "draw.io won't open the file"
+
+**Cause:** XML validation issue
+
+**Solutions:**
+- Open file in draw.io Desktop (not web)
+- Check that all device IPs are valid
+- Verify inventory JSON is valid: `Get-Content file.json | ConvertFrom-Json`
+
+### "Module won't import"
+
+**Cause:** PowerShell version too old
+
+**Solutions:**
+- Check version: `$PSVersionTable.PSVersion` (must be 7.0+)
+- Upgrade: Download from https://aka.ms/powershell
+
+### "SNMP returns nothing"
+
+**Cause:** SNMP not configured or community string wrong
+
+**Solutions:**
+- Verify SNMP is enabled on devices
+- Check community string is correct
+- Ensure UDP port 161 is open
+- Try manual test: `snmpwalk.exe -v2c -c public 192.168.1.1`
+
+---
+
+## 🧪 Running Tests
+
+```powershell
+# Install Pester if needed
+Install-Module -Name Pester -MinimumVersion 5.0.0 -Force
+
+# Run all tests
+Invoke-Pester -Path .\tests\NetDiagram.Tests.ps1
+
+# Run with detailed output
+Invoke-Pester -Path .\tests\NetDiagram.Tests.ps1 -Output Detailed
+```
+
+---
+
+## 🔒 Security
+
+- **Never commit** credential files with secrets
+- Use `SecretManagement` module for SNMP community strings
+- SNMP v2c sends community strings in clear text - use v3 for production
+- The quick-start wizard does NOT store any credentials
+
+---
+
+## 📚 Learn More
+
+- **draw.io Editor:** https://app.diagrams.net/
+- **draw.io Desktop:** https://github.com/jgraph/drawio-desktop
+- **PowerShell 7:** https://aka.ms/powershell
+- **SecretManagement:** https://docs.microsoft.com/powershell/module/microsoft.powershell.secretmanagement
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+1. Ensure tests pass: `Invoke-Pester .\tests\NetDiagram.Tests.ps1`
+2. Follow PowerShell best practices
+3. Update documentation
+4. Add tests for new features
+
+---
+
+## 📜 License
+
+This project is provided as-is for educational and professional use.
+
+---
+
+## 🎯 Quick Reference
+
+```powershell
+# Absolute fastest way to diagram your network:
+.\New-NetworkDiagram.ps1
+
+# Then open: my-network.drawio in https://app.diagrams.net/
+
+# Customize the auto-generated inventory:
+notepad my-network-inventory.json
+
+# Re-generate with your changes:
+Import-Module .\src\NetDiagram-PS.psd1
+Import-Inventory my-network-inventory.json | Export-DrawIO -OutFile my-network.drawio
+```
+
+**That's it! Your network is now documented.**
+
+---
+
+## 🆘 Need Help?
+
+1. Read the troubleshooting section above
+2. Check command help: `Get-Help <CommandName> -Examples`
+3. Review example files in `examples/`
+4. Report issues with detailed error messages
+
+**Happy Diagramming!** 🎉

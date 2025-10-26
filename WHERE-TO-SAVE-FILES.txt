@@ -1,0 +1,23 @@
+WHERE TO SAVE YOUR NETWORK DIAGRAMS AND INVENTORIES
+====================================================
+
+❌ DON'T save your files in this module directory!
+
+✅ DO create a separate workspace folder:
+
+    # Example:
+    mkdir C:\MyNetworkDocs
+    cd C:\MyNetworkDocs
+
+    # Import the module
+    Import-Module C:\Path\To\PSNetMap\NetDiagram-PS\NetDiagram-PS.psd1
+
+    # Now create your files here:
+    # - my-inventory.json
+    # - my-network.drawio
+    # - credmap.json
+    # etc.
+
+This keeps the module clean and your personal network data separate.
+
+For more help, see README.md

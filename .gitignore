@@ -1,0 +1,40 @@
+# User-generated files (create these in YOUR workspace, NOT in module root)
+*.drawio
+*-inventory.json
+*-network*.json
+*.drawio.bkp
+*-meta.json
+scanmeta.json
+
+# Claude Code settings
+.claude/
+
+# Test files
+test-*.ps1
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output directories
+output/
+scans/
+
+# Secrets
+*.key
+*.secret
+credentials.json
+
+# Build artifacts
+build/
+dist/
+*.nupkg
+
+# PowerShell module cache
+PSGetModuleInfo.xml

@@ -2,7 +2,7 @@
 
 BeforeAll {
     # Import module
-    $modulePath = Join-Path $PSScriptRoot '..\src\NetDiagram-PS.psd1'
+    $modulePath = Join-Path $PSScriptRoot '..\NetDiagram-PS\NetDiagram-PS.psd1'
     Import-Module $modulePath -Force
 
     # Setup test data directory
@@ -38,7 +38,7 @@ Describe 'Module Import' {
     It 'Should import the module successfully' {
         $module = Get-Module -Name 'NetDiagram-PS'
         $module | Should -Not -BeNullOrEmpty
-        $module.Version | Should -Be '0.1.0'
+        $module.Version | Should -Be '1.0.0'
     }
 
     It 'Should export all required cmdlets' {
@@ -192,9 +192,9 @@ Describe 'Export-DrawIO' {
 
         $content = Get-Content -Path $drawioPath -Raw
 
-        # Count vertex cells (nodes) - should have 3 nodes
+        # Count vertex cells (nodes + subnet containers) - should have 3 nodes + 1 subnet = 4
         $vertexMatches = [regex]::Matches($content, 'vertex="1"')
-        $vertexMatches.Count | Should -Be 3
+        $vertexMatches.Count | Should -Be 4
     }
 
     It 'Should reference existing node IDs in edges' {

@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Module-level variables
-$script:ModuleVersion = '0.1.0'
+$script:ModuleVersion = '1.0.0'
 
 #region Helper Functions
 
@@ -508,6 +508,7 @@ function Merge-Edges {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Edges
     )
 

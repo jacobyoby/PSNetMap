@@ -38,7 +38,7 @@ Describe 'Module Import' {
     It 'Should import the module successfully' {
         $module = Get-Module -Name 'NetDiagram-PS'
         $module | Should -Not -BeNullOrEmpty
-        $module.Version | Should -Be '1.0.0'
+        $module.Version | Should -Be '1.0.1'
     }
 
     It 'Should export all required cmdlets' {

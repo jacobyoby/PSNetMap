@@ -1,4 +1,4 @@
-1# PSNetMap - Folder Structure
+# PSNetMap - Folder Structure
 
 This document describes the folder structure following PowerShell module best practices.
 
@@ -6,27 +6,20 @@ This document describes the folder structure following PowerShell module best pr
 
 ```
 PSNetMap/
-├── .gitignore                          # Git ignore rules
-├── README.md                           # Main documentation
+├── CHANGELOG.md                        # Release history
 ├── LICENSE                             # MIT License
-├── CHANGELOG.md                        # Version history
+├── README.md                           # Main documentation & quick start
 ├── STRUCTURE.md                        # This file
-│
-├── NetDiagram-PS/                      # PowerShell Module (Standard location)
-│   ├── NetDiagram-PS.psd1             # Module manifest
-│   └── NetDiagram-PS.psm1             # Module implementation
-│
-├── docs/                               # Extended documentation
-│   ├── AUTO-DISCOVERY-RESEARCH.md     # Industry research on auto-discovery
-│   └── DISCOVERY-QUICK-REF.md         # Quick reference guide
-│
+├── WHERE-TO-SAVE-FILES.txt             # Guidance on storing personal data
+├── NetDiagram-PS/                      # PowerShell module root
+│   ├── NetDiagram-PS.psd1              # Module manifest (exports cmdlets)
+│   └── NetDiagram-PS.psm1              # Module implementation
 ├── examples/                           # Example files and helper scripts
-│   ├── inventory-template.json        # Template inventory file
-│   ├── credmap.json                   # Credential mapping template
-│   └── New-NetworkDiagram.ps1         # Quick-start wizard script
-│
+│   ├── New-NetworkDiagram.ps1          # Quick-start wizard script
+│   ├── credmap.json                    # Credential mapping template
+│   └── inventory-template.json         # Inventory template
 └── tests/                              # Pester test suite
-    └── NetDiagram-PS.Tests.ps1        # Module tests
+    └── NetDiagram.Tests.ps1            # Tests for the module functions
 ```
 
 ## Best Practices Implemented
@@ -43,10 +36,11 @@ PSNetMap/
 - **Documentation**: Root directory
 
 ### ✅ Proper Documentation
-- `README.md` - User guide and quick start
+- `README.md` - Quick start, usage, and repository layout
 - `LICENSE` - MIT License
 - `CHANGELOG.md` - Version history
-- `STRUCTURE.md` - This file
+- `STRUCTURE.md` - Supplemental structure reference
+- `WHERE-TO-SAVE-FILES.txt` - Guidance for keeping generated data outside the repo
 
 ### ✅ Git Configuration
 - `.gitignore` excludes:
@@ -77,19 +71,7 @@ For the easiest experience, run the wizard:
 .\examples\New-NetworkDiagram.ps1
 ```
 
-## Future Enhancements
-
-Potential structure additions:
-
-- `NetDiagram-PS/Public/` - Public function files
-- `NetDiagram-PS/Private/` - Private helper functions
-- `docs/` - Extended documentation
-- `build/` - Build scripts for CI/CD
-- `.github/` - GitHub Actions workflows
-
-These are optional and can be added as the project grows.
-
 ---
 
-**Last Updated:** 2025-01-25
-**Module Version:** 0.1.0
+**Last Updated:** 2025-11-01
+**Module Version:** 1.0.1

@@ -1,35 +1,33 @@
 # NetDiagram-PS
 
-**Automatically discover your network and create professional diagrams in seconds.**
-
-A PowerShell 7+ module that discovers your network topology and generates beautiful draw.io diagrams with Cisco network icons, subnet containers, and professional styling.
+NetDiagram-PS is a PowerShell 7+ module that discovers your network topology and generates draw.io diagrams with Cisco network icons, subnet containers, and consistent styling.
 
 ---
 
-## 🚀 Quick Start (30 seconds)
+## Quick Start
 
-**Just want a diagram of YOUR network?** Run this:
+To generate a diagram of the local network, run the following script from the repository root:
 
 ```powershell
-# 1. Download/clone this repo
+# 1. Clone this repository
 cd PSNetMap
 
 # 2. Run the wizard
 .\New-NetworkDiagram.ps1
 
-# 3. Open my-network.drawio in draw.io!
+# 3. Open my-network.drawio in draw.io
 ```
 
-That's it! The wizard automatically:
-- ✅ Discovers your network configuration
-- ✅ Scans for active devices
-- ✅ Tests connectivity
-- ✅ Generates a professional diagram
-- ✅ Saves an inventory file you can edit
+The wizard performs the following actions:
+- Discovers the network configuration
+- Scans for active devices
+- Tests connectivity
+- Generates a draw.io diagram
+- Saves an inventory file for later refinement
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
 - **PowerShell 7.0+** (required)
   - Windows: https://aka.ms/powershell
@@ -44,9 +42,9 @@ That's it! The wizard automatically:
 
 ---
 
-## 📖 Usage
+## Usage
 
-### Method 1: Quick Start Wizard (Easiest)
+### Method 1: Quick Start Wizard (recommended)
 
 ```powershell
 # Quick scan (common IPs only, ~10 seconds)
@@ -59,7 +57,7 @@ That's it! The wizard automatically:
 .\New-NetworkDiagram.ps1 -ScanDepth Full -OutputPath .\office-network.drawio
 ```
 
-### Method 2: Manual Workflow (More Control)
+### Method 2: Manual Workflow (manual inventory)
 
 ```powershell
 # Import the module
@@ -73,7 +71,7 @@ $topo = Import-Inventory -Path '.\my-inventory.json'
 $topo | Export-DrawIO -OutFile '.\my-network.drawio'
 ```
 
-### Method 3: With SNMP Discovery (Advanced)
+### Method 3: With SNMP Discovery (advanced)
 
 ```powershell
 Import-Module .\NetDiagram-PS\NetDiagram-PS.psd1
@@ -93,7 +91,7 @@ $topo | Export-DrawIO -OutFile '.\network.drawio'
 
 ---
 
-## 📁 Inventory File Format
+## Inventory File Format
 
 Create a JSON file with your network devices:
 
@@ -125,23 +123,23 @@ Create a JSON file with your network devices:
 }
 ```
 
-**Supported Roles:** `router`, `core-router`, `distribution`, `switch`, `server`, `workstation`
+Supported roles: `router`, `core-router`, `distribution`, `switch`, `server`, `workstation`
 
 See `examples/inventory-template.json` for a complete template.
 
 ---
 
-## 🎨 Diagram Features
+## Diagram Features
 
-Your diagrams include:
+Generated diagrams include:
 
-- ✨ **Cisco Network Icons** - Professional symbols for routers, switches, servers
-- 📦 **Subnet Containers** - Visual grouping by network segment
-- 🎯 **Color-Coded Status** - Green (reachable), Red (unreachable), Gray (unknown)
-- 🔗 **Smart Connectors** - Orthogonal routing with rounded corners
-- 📊 **Confidence Levels** - Solid lines (L2-SNMP verified), Dashed (L3-Inferred)
-- 🏷️ **Clear Labels** - Device names, IPs, and connection details
-- 📏 **Hierarchical Layout** - Automatic positioning by network layer
+- Cisco network icons for routers, switches, and servers
+- Subnet containers for visual grouping by network segment
+- Color-coded status indicators: green (reachable), red (unreachable), and gray (unknown)
+- Orthogonal connectors with rounded corners
+- Confidence levels: solid lines (layer 2 SNMP verified) and dashed lines (layer 3 inferred)
+- Labels that include device names, IP addresses, and connection details
+- Hierarchical layouts that align devices by network layer
 
 ### Example Output
 
@@ -163,7 +161,7 @@ Your diagrams include:
 
 ---
 
-## 🔧 Available Commands
+## Available Commands
 
 After importing the module, you have access to:
 
@@ -185,12 +183,12 @@ Get-Help Export-DrawIO -Full
 
 ---
 
-## 📝 Common Workflows
+## Common Workflows
 
 ### 1. Diagram Your Current Network
 
 ```powershell
-# One command - done!
+# Run the wizard with default settings
 .\New-NetworkDiagram.ps1
 ```
 
@@ -238,7 +236,7 @@ Compare-NetworkScans `
 
 ---
 
-## 🎓 Examples
+## Examples
 
 Check the `examples/` directory:
 
@@ -247,7 +245,7 @@ Check the `examples/` directory:
 
 ---
 
-## ❓ Troubleshooting
+## Troubleshooting
 
 ### "No devices found during scan"
 
@@ -287,7 +285,7 @@ Check the `examples/` directory:
 
 ---
 
-## 🧪 Running Tests
+## Running Tests
 
 ```powershell
 # Install Pester if needed
@@ -302,7 +300,7 @@ Invoke-Pester -Path .\tests\NetDiagram.Tests.ps1 -Output Detailed
 
 ---
 
-## 🔒 Security
+## Security
 
 - **Never commit** credential files with secrets
 - Use `SecretManagement` module for SNMP community strings
@@ -311,7 +309,7 @@ Invoke-Pester -Path .\tests\NetDiagram.Tests.ps1 -Output Detailed
 
 ---
 
-## 📚 Learn More
+## Additional Resources
 
 - **draw.io Editor:** https://app.diagrams.net/
 - **draw.io Desktop:** https://github.com/jgraph/drawio-desktop
@@ -320,7 +318,7 @@ Invoke-Pester -Path .\tests\NetDiagram.Tests.ps1 -Output Detailed
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions welcome! Please:
 1. Ensure tests pass: `Invoke-Pester .\tests\NetDiagram.Tests.ps1`
@@ -330,37 +328,34 @@ Contributions welcome! Please:
 
 ---
 
-## 📜 License
+## License
 
 This project is provided as-is for educational and professional use.
 
 ---
 
-## 🎯 Quick Reference
+## Quick Reference
 
 ```powershell
-# Absolute fastest way to diagram your network:
+# Quickly generate a diagram of the current network:
 .\New-NetworkDiagram.ps1
 
-# Then open: my-network.drawio in https://app.diagrams.net/
+# Open the generated diagram in https://app.diagrams.net/
 
-# Customize the auto-generated inventory:
+# Modify the generated inventory if needed:
 notepad my-network-inventory.json
 
-# Re-generate with your changes:
+# Export an updated diagram after editing the inventory:
 Import-Module .\NetDiagram-PS\NetDiagram-PS.psd1
 Import-Inventory my-network-inventory.json | Export-DrawIO -OutFile my-network.drawio
 ```
 
-**That's it! Your network is now documented.**
-
 ---
 
-## 🆘 Need Help?
+## Need Help?
 
 1. Read the troubleshooting section above
 2. Check command help: `Get-Help <CommandName> -Examples`
 3. Review example files in `examples/`
 4. Report issues with detailed error messages
 
-**Happy Diagramming!** 🎉

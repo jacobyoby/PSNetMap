@@ -5,6 +5,17 @@ All notable changes to NetDiagram-PS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2025-11-01
+
+### Changed
+- Clarified quick-start instructions to call the wizard from the `examples/` folder.
+- Documented the actual repository layout and removed references to a non-existent `docs/` directory.
+- Noted the `snmpwalk.exe` requirement for SNMP discovery and the need for shims on non-Windows platforms.
+- Updated metadata files to reflect version `1.0.1`.
+
+### Fixed
+- Corrected STRUCTURE.md to match the current filesystem and documentation set.
+
 ## [1.0.0] - 2025-10-25
 
 ### Added
@@ -44,10 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - No configuration required - works out of the box
 
 - **Documentation**
-  - Comprehensive README with usage examples
-  - Detailed function help with examples
-  - Security best practices guide
-  - Troubleshooting section
+  - README with quick start instructions and usage examples
+  - STRUCTURE.md and WHERE-TO-SAVE-FILES.txt with project layout guidance
+  - Example JSON templates for inventories and credential maps
 
 ### Security Features
 - Opt-in default credential testing with clear warnings
@@ -56,23 +66,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No credentials stored in plain text
 
 ### Technical Details
-- PowerShell 7.0+ required
-- Pester 5.0+ test suite with 100+ test cases
+- PowerShell 7.0+ required (validated on Windows environments)
+- Pester 5.0+ test suite covering core cmdlets
 - Fully typed with strict mode enabled
 - Defensive null safety throughout
 - Parallel processing for performance
-- Cross-platform compatible (Windows/Linux/macOS)
 
 ### Standards Compliance
-- SNMP v2c/v3 support
+- SNMP v2c support via net-snmp tools
 - LLDP (IEEE 802.1AB) neighbor discovery
 - Draw.io XML format compatibility
 - JSON inventory format
 
 ### Testing
-- 100+ Pester test cases
-- Round-trip validation
-- Defensive coding tests
+- Pester tests for import, export, comparison, and discovery cmdlets
+- Round-trip validation of generated Draw.io files
 - Mock-based unit tests for external dependencies
 
 [1.0.0]: https://github.com/jacobyoby/PSNetMap/releases/tag/v1.0.0

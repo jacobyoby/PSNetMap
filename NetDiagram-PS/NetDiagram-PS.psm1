@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Module-level variables
-$script:ModuleVersion = '1.0.0'
+$script:ModuleVersion = '1.0.1'
 
 #region Helper Functions
 

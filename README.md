@@ -6,14 +6,14 @@ NetDiagram-PS is a PowerShell 7+ module that discovers your network topology and
 
 ## Quick Start
 
-To generate a diagram of the local network, run the following script from the repository root:
+To generate a diagram of the local network, run the example wizard from the repository root:
 
 ```powershell
 # 1. Clone this repository
 cd PSNetMap
 
-# 2. Run the wizard
-.\New-NetworkDiagram.ps1
+# 2. Run the wizard from the examples folder
+pwsh .\examples\New-NetworkDiagram.ps1
 
 # 3. Open my-network.drawio in draw.io
 ```
@@ -34,8 +34,8 @@ The wizard performs the following actions:
   - Already installed? Check with: `$PSVersionTable.PSVersion`
 
 - **net-snmp tools** (optional, for SNMP discovery)
-  - Windows: `choco install net-snmp`
-  - Linux: `apt install snmp`
+  - Windows: `choco install net-snmp` (module calls `snmpwalk.exe`)
+  - Linux/macOS: install `snmpwalk` and create a `snmpwalk.exe` shim if needed
 
 - **Pester 5.0+** (optional, only for running tests)
   - Install: `Install-Module -Name Pester -MinimumVersion 5.0.0`
@@ -48,13 +48,13 @@ The wizard performs the following actions:
 
 ```powershell
 # Quick scan (common IPs only, ~10 seconds)
-.\New-NetworkDiagram.ps1
+pwsh .\examples\New-NetworkDiagram.ps1
 
 # Medium scan (first 50 IPs, ~30 seconds)
-.\New-NetworkDiagram.ps1 -ScanDepth Medium
+pwsh .\examples\New-NetworkDiagram.ps1 -ScanDepth Medium
 
 # Full scan (all 254 IPs, ~2 minutes)
-.\New-NetworkDiagram.ps1 -ScanDepth Full -OutputPath .\office-network.drawio
+pwsh .\examples\New-NetworkDiagram.ps1 -ScanDepth Full -OutputPath .\office-network.drawio
 ```
 
 ### Method 2: Manual Workflow (manual inventory)
@@ -161,6 +161,24 @@ Generated diagrams include:
 
 ---
 
+## Repository Layout
+
+```text
+PSNetMap/
+├── CHANGELOG.md            # Release history
+├── LICENSE                 # MIT license
+├── README.md               # Main documentation (this file)
+├── STRUCTURE.md            # Additional notes on the folder layout
+├── WHERE-TO-SAVE-FILES.txt # Tips for keeping inventories outside the repo
+├── NetDiagram-PS/          # PowerShell module manifest & implementation
+├── examples/               # Wizard script plus sample JSON templates
+└── tests/                  # Pester test suite
+```
+
+The module ships without a separate `docs/` directory. All user-facing documentation currently lives in the files listed above.
+
+---
+
 ## Available Commands
 
 After importing the module, you have access to:
@@ -169,7 +187,12 @@ After importing the module, you have access to:
 |---------|---------|
 | `Import-Inventory` | Load network inventory from JSON |
 | `Test-DeviceReachability` | Ping test all devices in parallel |
+| `Get-LocalARPTable` | Read the local ARP cache |
+| `Resolve-IPHostname` | Perform reverse DNS lookups |
+| `Get-MACVendor` | Look up vendors for MAC addresses |
+| `Invoke-PortScan` | Check TCP ports with optional banner grabbing |
 | `Get-SnmpNeighbors` | Discover connections via SNMP |
+| `Get-CommonSNMPStrings` | Suggest likely SNMP community strings |
 | `Merge-Edges` | Combine and deduplicate connections |
 | `Export-DrawIO` | Generate diagram file |
 | `Export-Metadata` | Save scan statistics |
@@ -189,7 +212,7 @@ Get-Help Export-DrawIO -Full
 
 ```powershell
 # Run the wizard with default settings
-.\New-NetworkDiagram.ps1
+pwsh .\examples\New-NetworkDiagram.ps1
 ```
 
 ### 2. Document Server Infrastructure
@@ -242,6 +265,7 @@ Check the `examples/` directory:
 
 - `inventory-template.json` - Template for creating your inventory
 - `credmap.json` - Template for SNMP credentials
+- `New-NetworkDiagram.ps1` - Guided discovery wizard
 
 ---
 
@@ -338,7 +362,7 @@ This project is provided as-is for educational and professional use.
 
 ```powershell
 # Quickly generate a diagram of the current network:
-.\New-NetworkDiagram.ps1
+pwsh .\examples\New-NetworkDiagram.ps1
 
 # Open the generated diagram in https://app.diagrams.net/
 

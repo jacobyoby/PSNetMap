@@ -1,6 +1,8 @@
 # NetDiagram-PS
 
-NetDiagram-PS is a PowerShell 7+ module that discovers your network topology and generates draw.io diagrams with Cisco network icons, subnet containers, and consistent styling.
+NetDiagram-PS is a cross-platform PowerShell 7+ module that discovers your network topology and generates draw.io diagrams with Cisco network icons, subnet containers, and consistent styling.
+
+**✓ Windows | ✓ macOS | ✓ Linux**
 
 ---
 
@@ -29,13 +31,16 @@ The wizard performs the following actions:
 
 ## Prerequisites
 
-- **PowerShell 7.0+** (required)
+- **PowerShell 7.0+** (required, cross-platform)
   - Windows: https://aka.ms/powershell
+  - macOS: `brew install --cask powershell` or download from https://aka.ms/powershell
+  - Linux: Follow instructions at https://aka.ms/powershell
   - Already installed? Check with: `$PSVersionTable.PSVersion`
 
 - **net-snmp tools** (optional, for SNMP discovery)
   - Windows: `choco install net-snmp` (module calls `snmpwalk.exe`)
-  - Linux/macOS: install `snmpwalk` and create a `snmpwalk.exe` shim if needed
+  - macOS: `brew install net-snmp` (provides `snmpwalk`)
+  - Linux: `apt install snmp` or `yum install net-snmp-utils`
 
 - **Pester 5.0+** (optional, only for running tests)
   - Install: `Install-Module -Name Pester -MinimumVersion 5.0.0`
@@ -276,9 +281,10 @@ Check the `examples/` directory:
 **Cause:** Firewall blocking ICMP (ping)
 
 **Solutions:**
-- Run from an administrator/elevated PowerShell
-- Disable Windows Firewall temporarily
-- Manually create inventory file with known IPs
+- Windows: Run from an administrator/elevated PowerShell, temporarily disable Windows Firewall
+- macOS: Run with `sudo pwsh ./examples/New-NetworkDiagram.ps1` to bypass firewall restrictions
+- Linux: Run with `sudo pwsh ./examples/New-NetworkDiagram.ps1` or adjust iptables rules
+- All platforms: Manually create inventory file with known IPs
 
 ### "draw.io won't open the file"
 

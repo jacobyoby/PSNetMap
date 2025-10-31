@@ -5,6 +5,29 @@ All notable changes to NetDiagram-PS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-10-31
+
+### Added
+- **Cross-Platform Support** - NetDiagram-PS now works natively on Windows, macOS, and Linux
+  - macOS: Uses `ifconfig`, `route`, `scutil`, and `arp` commands for network discovery
+  - Linux: Uses `ip` and `arp` commands for network discovery
+  - All platforms: Automatic OS detection and appropriate command selection
+  - macOS/Linux: Hostname detection via `hostname` command
+  - macOS: OS version detection via `sw_vers`
+  - Linux: Distribution detection via `/etc/os-release`
+
+### Changed
+- `New-NetworkDiagram.ps1` now detects the operating system and uses platform-appropriate commands
+- `Get-LocalARPTable` function updated with cross-platform ARP cache parsing
+- Network interface discovery now supports both Windows PowerShell cmdlets and Unix commands
+- DNS server discovery adapted for macOS (`scutil --dns`) and Linux (`/etc/resolv.conf`)
+- README updated with cross-platform installation instructions and troubleshooting
+- Prerequisites section now includes macOS and Linux installation methods
+
+### Fixed
+- Script no longer crashes on macOS/Linux due to Windows-only cmdlets
+- Gateway and DNS discovery now works correctly on Unix-based systems
+
 ## [1.0.1] - 2025-11-01
 
 ### Changed

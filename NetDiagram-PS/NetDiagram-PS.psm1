@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Module-level variables
-$script:ModuleVersion = '1.0.1'
+$script:ModuleVersion = '1.1.0'
 
 #region Helper Functions
 
@@ -1124,23 +1124,89 @@ function Get-LocalARPTable {
     )
 
     try {
-        $arpEntries = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        $arpEntries = @()
+        
+        if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindows) {
+            # Windows: Use Get-NetNeighbor
+            $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue
 
-        if ($InterfaceAlias) {
-            $arpEntries = $arpEntries | Where-Object { $_.InterfaceAlias -eq $InterfaceAlias }
-        }
+            if ($InterfaceAlias) {
+                $neighbors = $neighbors | Where-Object { $_.InterfaceAlias -eq $InterfaceAlias }
+            }
 
-        foreach ($entry in $arpEntries) {
-            [pscustomobject]@{
-                IPAddress       = $entry.IPAddress
-                MACAddress      = $entry.LinkLayerAddress
-                State           = $entry.State
-                InterfaceAlias  = $entry.InterfaceAlias
-                InterfaceIndex  = $entry.InterfaceIndex
+            foreach ($entry in $neighbors) {
+                $arpEntries += [pscustomobject]@{
+                    IPAddress       = $entry.IPAddress
+                    MACAddress      = $entry.LinkLayerAddress
+                    State           = $entry.State
+                    InterfaceAlias  = $entry.InterfaceAlias
+                    InterfaceIndex  = $entry.InterfaceIndex
+                }
+            }
+        } elseif ($IsMacOS) {
+            # macOS: Parse arp -an
+            $arpOutput = & arp -an 2>&1
+            foreach ($line in $arpOutput) {
+                # Format: ? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]
+                if ($line -match '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)\s+on\s+(\w+)') {
+                    $ip = $matches[1]
+                    $mac = $matches[2]
+                    $interface = $matches[3]
+                    
+                    if (-not $InterfaceAlias -or $interface -eq $InterfaceAlias) {
+                        $arpEntries += [pscustomobject]@{
+                            IPAddress       = $ip
+                            MACAddress      = $mac
+                            State           = 'Reachable'
+                            InterfaceAlias  = $interface
+                            InterfaceIndex  = $null
+                        }
+                    }
+                }
+            }
+        } elseif ($IsLinux) {
+            # Linux: Parse ip neigh or arp
+            $neighborOutput = & ip neigh show 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                # Use ip neigh
+                foreach ($line in $neighborOutput) {
+                    # Format: 192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
+                    if ($line -match '(\d+\.\d+\.\d+\.\d+)\s+dev\s+(\w+)\s+lladdr\s+([0-9a-f:]+)\s+(\w+)') {
+                        $ip = $matches[1]
+                        $interface = $matches[2]
+                        $mac = $matches[3]
+                        $state = $matches[4]
+                        
+                        if (-not $InterfaceAlias -or $interface -eq $InterfaceAlias) {
+                            $arpEntries += [pscustomobject]@{
+                                IPAddress       = $ip
+                                MACAddress      = $mac
+                                State           = $state
+                                InterfaceAlias  = $interface
+                                InterfaceIndex  = $null
+                            }
+                        }
+                    }
+                }
+            } else {
+                # Fallback to arp command
+                $arpOutput = & arp -an 2>&1
+                foreach ($line in $arpOutput) {
+                    if ($line -match '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)') {
+                        $arpEntries += [pscustomobject]@{
+                            IPAddress       = $matches[1]
+                            MACAddress      = $matches[2]
+                            State           = 'Reachable'
+                            InterfaceAlias  = $null
+                            InterfaceIndex  = $null
+                        }
+                    }
+                }
             }
         }
 
         Write-Verbose "Found $($arpEntries.Count) ARP entries"
+        return $arpEntries
     }
     catch {
         Write-Warning "Failed to retrieve ARP table: $_"

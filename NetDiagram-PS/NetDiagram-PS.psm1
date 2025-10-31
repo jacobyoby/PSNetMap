@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Module-level variables
-$script:ModuleVersion = '1.0.1'
+$script:ModuleVersion = '1.1.0'
 
 #region Helper Functions
 
@@ -481,11 +481,53 @@ function Test-IPInSubnet {
     #>
     param([string]$IP, [string]$CIDR)
 
-    # Simplified implementation for MVP - just check if IP starts with subnet prefix
-    if ($CIDR -match '^(\d+\.\d+)') {
-        return $IP.StartsWith($matches[1])
+    if ([string]::IsNullOrWhiteSpace($IP) -or [string]::IsNullOrWhiteSpace($CIDR)) {
+        return $false
     }
-    return $false
+
+    if ($CIDR -notmatch '^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$') {
+        return $false
+    }
+
+    $networkAddressString = $matches[1]
+    $prefixLength = [int]$matches[2]
+
+    if ($prefixLength -lt 0 -or $prefixLength -gt 32) {
+        return $false
+    }
+
+    try {
+        $ipAddress = [System.Net.IPAddress]::Parse($IP)
+        $networkAddress = [System.Net.IPAddress]::Parse($networkAddressString)
+    }
+    catch {
+        return $false
+    }
+
+    if ($ipAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork -or
+        $networkAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+        return $false
+    }
+
+    $ipBytes = $ipAddress.GetAddressBytes()
+    $networkBytes = $networkAddress.GetAddressBytes()
+
+    if ([System.BitConverter]::IsLittleEndian) {
+        [Array]::Reverse($ipBytes)
+        [Array]::Reverse($networkBytes)
+    }
+
+    $ipValue = [System.BitConverter]::ToUInt32($ipBytes, 0)
+    $networkValue = [System.BitConverter]::ToUInt32($networkBytes, 0)
+
+    $mask = if ($prefixLength -eq 0) {
+        [uint32]0
+    }
+    else {
+        [uint32]0xFFFFFFFF -shl (32 - $prefixLength)
+    }
+
+    return (($ipValue -band $mask) -eq ($networkValue -band $mask))
 }
 
 #endregion
@@ -1082,23 +1124,89 @@ function Get-LocalARPTable {
     )
 
     try {
-        $arpEntries = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        $arpEntries = @()
+        
+        if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindows) {
+            # Windows: Use Get-NetNeighbor
+            $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue
 
-        if ($InterfaceAlias) {
-            $arpEntries = $arpEntries | Where-Object { $_.InterfaceAlias -eq $InterfaceAlias }
-        }
+            if ($InterfaceAlias) {
+                $neighbors = $neighbors | Where-Object { $_.InterfaceAlias -eq $InterfaceAlias }
+            }
 
-        foreach ($entry in $arpEntries) {
-            [pscustomobject]@{
-                IPAddress       = $entry.IPAddress
-                MACAddress      = $entry.LinkLayerAddress
-                State           = $entry.State
-                InterfaceAlias  = $entry.InterfaceAlias
-                InterfaceIndex  = $entry.InterfaceIndex
+            foreach ($entry in $neighbors) {
+                $arpEntries += [pscustomobject]@{
+                    IPAddress       = $entry.IPAddress
+                    MACAddress      = $entry.LinkLayerAddress
+                    State           = $entry.State
+                    InterfaceAlias  = $entry.InterfaceAlias
+                    InterfaceIndex  = $entry.InterfaceIndex
+                }
+            }
+        } elseif ($IsMacOS) {
+            # macOS: Parse arp -an
+            $arpOutput = & arp -an 2>&1
+            foreach ($line in $arpOutput) {
+                # Format: ? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]
+                if ($line -match '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)\s+on\s+(\w+)') {
+                    $ip = $matches[1]
+                    $mac = $matches[2]
+                    $interface = $matches[3]
+                    
+                    if (-not $InterfaceAlias -or $interface -eq $InterfaceAlias) {
+                        $arpEntries += [pscustomobject]@{
+                            IPAddress       = $ip
+                            MACAddress      = $mac
+                            State           = 'Reachable'
+                            InterfaceAlias  = $interface
+                            InterfaceIndex  = $null
+                        }
+                    }
+                }
+            }
+        } elseif ($IsLinux) {
+            # Linux: Parse ip neigh or arp
+            $neighborOutput = & ip neigh show 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                # Use ip neigh
+                foreach ($line in $neighborOutput) {
+                    # Format: 192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
+                    if ($line -match '(\d+\.\d+\.\d+\.\d+)\s+dev\s+(\w+)\s+lladdr\s+([0-9a-f:]+)\s+(\w+)') {
+                        $ip = $matches[1]
+                        $interface = $matches[2]
+                        $mac = $matches[3]
+                        $state = $matches[4]
+                        
+                        if (-not $InterfaceAlias -or $interface -eq $InterfaceAlias) {
+                            $arpEntries += [pscustomobject]@{
+                                IPAddress       = $ip
+                                MACAddress      = $mac
+                                State           = $state
+                                InterfaceAlias  = $interface
+                                InterfaceIndex  = $null
+                            }
+                        }
+                    }
+                }
+            } else {
+                # Fallback to arp command
+                $arpOutput = & arp -an 2>&1
+                foreach ($line in $arpOutput) {
+                    if ($line -match '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)') {
+                        $arpEntries += [pscustomobject]@{
+                            IPAddress       = $matches[1]
+                            MACAddress      = $matches[2]
+                            State           = 'Reachable'
+                            InterfaceAlias  = $null
+                            InterfaceIndex  = $null
+                        }
+                    }
+                }
             }
         }
 
         Write-Verbose "Found $($arpEntries.Count) ARP entries"
+        return $arpEntries
     }
     catch {
         Write-Warning "Failed to retrieve ARP table: $_"
@@ -1228,19 +1336,28 @@ function Get-MACVendor {
                 continue
             }
 
-            # Normalize MAC address format
-            $normalizedMAC = $mac.Replace('-', ':').Replace('.', ':').ToUpper()
+            $oui = $null
+            $vendor = 'Unknown'
 
-            # Extract OUI (first 3 octets)
-            if ($normalizedMAC -match '^([0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2})') {
-                $oui = $matches[1]
-                $vendor = $ouiDatabase[$oui]
+            # Remove non-hex characters and normalize to AA:BB:CC:DD:EE:FF
+            $hexOnly = ($mac -replace '[^0-9A-Fa-f]', '').ToUpper()
 
-                if (-not $vendor) {
-                    $vendor = 'Unknown'
+            if ($hexOnly.Length -ge 12) {
+                $hexOnly = $hexOnly.Substring(0, 12)
+
+                $octets = for ($i = 0; $i -lt 12; $i += 2) {
+                    $hexOnly.Substring($i, 2)
+                }
+
+                $normalizedMAC = ($octets -join ':')
+                $oui = ($octets[0..2] -join ':')
+
+                if ($ouiDatabase.ContainsKey($oui)) {
+                    $vendor = $ouiDatabase[$oui]
                 }
             }
             else {
+                $normalizedMAC = $mac.ToUpper()
                 $vendor = 'Invalid MAC'
             }
 
@@ -1299,18 +1416,34 @@ function Invoke-PortScan {
             $openPorts = @()
 
             foreach ($port in $Ports) {
+                $tcpClient = [System.Net.Sockets.TcpClient]::new()
+                $connectResult = $null
+
                 try {
-                    $tcpClient = New-Object System.Net.Sockets.TcpClient
-                    $connect = $tcpClient.BeginConnect($ip, $port, $null, $null)
-                    $wait = $connect.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+                    $connectResult = $tcpClient.BeginConnect($ip, $port, $null, $null)
+                    $connectedInTime = $connectResult.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
 
-                    if ($wait -and $tcpClient.Connected) {
-                        $banner = $null
+                    if (-not $connectedInTime) {
+                        continue
+                    }
 
-                        # Attempt banner grabbing if requested
-                        if ($GrabBanners) {
-                            try {
-                                $stream = $tcpClient.GetStream()
+                    try {
+                        $tcpClient.EndConnect($connectResult)
+                    }
+                    catch {
+                        continue
+                    }
+
+                    if (-not $tcpClient.Connected) {
+                        continue
+                    }
+
+                    $banner = $null
+
+                    if ($GrabBanners) {
+                        try {
+                            $stream = $tcpClient.GetStream()
+                            if ($stream.CanRead) {
                                 $stream.ReadTimeout = 500
                                 $buffer = New-Object byte[] 1024
                                 $bytesRead = $stream.Read($buffer, 0, 1024)
@@ -1318,25 +1451,29 @@ function Invoke-PortScan {
                                     $banner = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $bytesRead).Trim()
                                 }
                             }
-                            catch {
-                                # Banner grab failed, that's OK
-                            }
                         }
-
-                        $openPorts += [pscustomobject]@{
-                            Port    = $port
-                            State   = 'Open'
-                            Service = Get-ServiceName -Port $port
-                            Banner  = $banner
+                        catch {
+                            # Banner grab failed, that's OK
                         }
-
-                        Write-Verbose "  Port $port - Open"
                     }
 
-                    $tcpClient.Close()
+                    $openPorts += [pscustomobject]@{
+                        Port    = $port
+                        State   = 'Open'
+                        Service = Get-ServiceName -Port $port
+                        Banner  = $banner
+                    }
+
+                    Write-Verbose "  Port $port - Open"
                 }
                 catch {
                     # Port closed or filtered
+                }
+                finally {
+                    if ($connectResult -and $connectResult.AsyncWaitHandle) {
+                        $connectResult.AsyncWaitHandle.Close()
+                    }
+                    $tcpClient.Dispose()
                 }
             }
 

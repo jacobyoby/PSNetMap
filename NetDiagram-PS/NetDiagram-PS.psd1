@@ -1,6 +1,6 @@
 @{
     RootModule = 'NetDiagram-PS.psm1'
-    ModuleVersion = '1.0.1'
+    ModuleVersion = '1.1.0'
     GUID = 'a8f7e9c4-6d2b-4a1c-9e3f-7b8c9d0e1f2a'
     Author = 'Jacob Yoby'
     CompanyName = 'NetDiagram-PS'
@@ -41,7 +41,7 @@
             LicenseUri = 'https://github.com/jacobyoby/PSNetMap/blob/main/LICENSE'
             ProjectUri = 'https://github.com/jacobyoby/PSNetMap'
             IconUri = ''
-            ReleaseNotes = 'Version 1.0.1 - Documentation refinements and metadata updates for the 1.0.1 maintenance release'
+            ReleaseNotes = 'Version 1.1.0 - Cross-platform support for Windows, macOS, and Linux with native command integration'
         }
     }
 }

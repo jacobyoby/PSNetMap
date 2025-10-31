@@ -46,32 +46,130 @@ Write-Host "╚═════════════════════�
 # Step 1: Discover your network interfaces
 Write-Host "[1/5] Discovering your network configuration..." -ForegroundColor Yellow
 
-$interfaces = Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
-    $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown'
-}
-
-if ($interfaces.Count -eq 0) {
-    Write-Host "✗ No active network interfaces found!" -ForegroundColor Red
-    exit 1
+# Cross-platform network discovery
+if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindows) {
+    # Windows: Use native cmdlets
+    $interfaces = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
+        $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown'
+    }
+    
+    if ($interfaces.Count -eq 0) {
+        Write-Host "✗ No active network interfaces found!" -ForegroundColor Red
+        exit 1
+    }
+    
+    $primaryInterface = $interfaces | Select-Object -First 1
+    $myIP = $primaryInterface.IPAddress
+    $prefix = $primaryInterface.PrefixLength
+    
+    # Get gateway
+    $routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Where-Object { $_.NextHop -ne '0.0.0.0' }
+    $gateway = $routes | Select-Object -First 1 -ExpandProperty NextHop
+    
+    # Get DNS
+    $dnsServers = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.ServerAddresses.Count -gt 0 } |
+        Select-Object -ExpandProperty ServerAddresses -Unique |
+        Where-Object { $_ -notmatch '^(127\.|::1|fe80:)' } |
+        Select-Object -First 3)
+} else {
+    # macOS/Linux: Parse ifconfig/ip commands
+    if ($IsMacOS) {
+        # Use ifconfig on macOS
+        $ifconfigOutput = & ifconfig -a 2>&1
+        $ifconfigText = $ifconfigOutput -join "`n"
+        
+        # Parse for active IPv4 addresses
+        $ipMatches = [regex]::Matches($ifconfigText, 'inet\s+(\d+\.\d+\.\d+\.\d+)\s+netmask\s+0x([0-9a-f]+)')
+        $interfaces = @()
+        
+        foreach ($match in $ipMatches) {
+            $ip = $match.Groups[1].Value
+            if ($ip -ne '127.0.0.1') {
+                # Convert hex netmask to prefix length
+                $hexMask = $match.Groups[2].Value
+                $binaryMask = [Convert]::ToString([Convert]::ToInt64($hexMask, 16), 2)
+                $prefix = ($binaryMask.ToCharArray() | Where-Object { $_ -eq '1' }).Count
+                
+                $interfaces += [PSCustomObject]@{
+                    IPAddress = $ip
+                    PrefixLength = $prefix
+                }
+            }
+        }
+        
+        # Get default gateway using route command
+        $routeOutput = & route -n get default 2>&1
+        $gatewayMatch = [regex]::Match(($routeOutput -join "`n"), 'gateway:\s+(\d+\.\d+\.\d+\.\d+)')
+        if ($gatewayMatch.Success) {
+            $gateway = $gatewayMatch.Groups[1].Value
+        } else {
+            $gateway = $null
+        }
+        
+        # Get DNS servers from /etc/resolv.conf or scutil
+        $dnsOutput = & scutil --dns 2>&1
+        $dnsText = $dnsOutput -join "`n"
+        $dnsMatches = [regex]::Matches($dnsText, 'nameserver\[\d+\]\s*:\s*(\d+\.\d+\.\d+\.\d+)')
+        $dnsServers = @($dnsMatches | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique -First 3)
+        
+        if ($dnsServers.Count -eq 0) {
+            # Fallback to /etc/resolv.conf
+            if (Test-Path '/etc/resolv.conf') {
+                $resolvConf = Get-Content '/etc/resolv.conf' -ErrorAction SilentlyContinue
+                $dnsServers = @($resolvConf | Where-Object { $_ -match '^nameserver\s+(\d+\.\d+\.\d+\.\d+)' } | 
+                    ForEach-Object { $matches[1] } | Select-Object -Unique -First 3)
+            }
+        }
+    } elseif ($IsLinux) {
+        # Use ip command on Linux
+        $ipOutput = & ip -4 addr show 2>&1
+        $ipText = $ipOutput -join "`n"
+        
+        # Parse for active IPv4 addresses
+        $ipMatches = [regex]::Matches($ipText, 'inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)')
+        $interfaces = @()
+        
+        foreach ($match in $ipMatches) {
+            $ip = $match.Groups[1].Value
+            if ($ip -ne '127.0.0.1') {
+                $interfaces += [PSCustomObject]@{
+                    IPAddress = $ip
+                    PrefixLength = [int]$match.Groups[2].Value
+                }
+            }
+        }
+        
+        # Get default gateway
+        $routeOutput = & ip route show default 2>&1
+        $gatewayMatch = [regex]::Match(($routeOutput -join "`n"), 'default\s+via\s+(\d+\.\d+\.\d+\.\d+)')
+        if ($gatewayMatch.Success) {
+            $gateway = $gatewayMatch.Groups[1].Value
+        } else {
+            $gateway = $null
+        }
+        
+        # Get DNS servers from /etc/resolv.conf
+        $dnsServers = @()
+        if (Test-Path '/etc/resolv.conf') {
+            $resolvConf = Get-Content '/etc/resolv.conf' -ErrorAction SilentlyContinue
+            $dnsServers = @($resolvConf | Where-Object { $_ -match '^nameserver\s+(\d+\.\d+\.\d+\.\d+)' } | 
+                ForEach-Object { $matches[1] } | Select-Object -Unique -First 3)
+        }
+    }
+    
+    if ($interfaces.Count -eq 0) {
+        Write-Host "✗ No active network interfaces found!" -ForegroundColor Red
+        exit 1
+    }
+    
+    $primaryInterface = $interfaces | Select-Object -First 1
+    $myIP = $primaryInterface.IPAddress
+    $prefix = $primaryInterface.PrefixLength
 }
 
 Write-Host "      Found $($interfaces.Count) active network interface(s)" -ForegroundColor Green
-
-$primaryInterface = $interfaces | Select-Object -First 1
-$myIP = $primaryInterface.IPAddress
-$prefix = $primaryInterface.PrefixLength
-
-# Get gateway
-$routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
-    Where-Object { $_.NextHop -ne '0.0.0.0' }
-$gateway = $routes | Select-Object -First 1 -ExpandProperty NextHop
-
-# Get DNS
-$dnsServers = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.ServerAddresses.Count -gt 0 } |
-    Select-Object -ExpandProperty ServerAddresses -Unique |
-    Where-Object { $_ -notmatch '^(127\.|::1|fe80:)' } |
-    Select-Object -First 3)
 
 Write-Host "      Your IP: $myIP/$prefix" -ForegroundColor Cyan
 Write-Host "      Gateway: $gateway" -ForegroundColor Cyan
@@ -95,10 +193,30 @@ $subnets += [pscustomobject]@{
     VLAN = $null
 }
 
-# Add your computer
-$computerName = $env:COMPUTERNAME
-$osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-$osCaption = if ($osInfo) { $osInfo.Caption } else { "Unknown OS" }
+# Add your computer - cross-platform
+if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindows) {
+    $computerName = $env:COMPUTERNAME
+    $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    $osCaption = if ($osInfo) { $osInfo.Caption } else { "Windows" }
+} else {
+    # macOS/Linux
+    $computerName = & hostname 2>&1 | Select-Object -First 1
+    if ($IsMacOS) {
+        $osVersion = & sw_vers -productVersion 2>&1
+        $osCaption = "macOS $osVersion"
+    } elseif ($IsLinux) {
+        # Try to get Linux distribution info
+        if (Test-Path '/etc/os-release') {
+            $osRelease = Get-Content '/etc/os-release' -ErrorAction SilentlyContinue
+            $prettyName = $osRelease | Where-Object { $_ -match '^PRETTY_NAME="(.+)"' } | ForEach-Object { $matches[1] }
+            $osCaption = if ($prettyName) { $prettyName } else { "Linux" }
+        } else {
+            $osCaption = "Linux"
+        }
+    } else {
+        $osCaption = "Unix-like"
+    }
+}
 
 $nodes += [pscustomobject]@{
     IP = $myIP

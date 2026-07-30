@@ -8,7 +8,9 @@
     This script automatically discovers your network configuration and creates a professional network diagram.
     No configuration files needed - just run it!
 .PARAMETER ScanDepth
-    How deep to scan: Quick (common IPs only), Medium (first 50 IPs), Full (all 254 IPs)
+    How deep to scan the detected subnet: Quick (up to 8 hosts sampled across the range),
+    Medium (first 50 hosts), Full (all usable hosts, capped at a /22 = 1022 hosts for
+    larger subnets). Host addresses are derived from the interface's real CIDR prefix.
 .PARAMETER OutputPath
     Where to save the diagram (default: .\my-network.drawio)
 .EXAMPLE
@@ -29,8 +31,82 @@ param(
     [string]$OutputPath = '.\my-network.drawio'
 )
 
+# ── IPv4 CIDR helpers ────────────────────────────────────────────────────────
+# Real prefix-aware host enumeration (replaces the old /24-only "first 3 octets"
+# assumption). Works for any prefix; the caller caps how many hosts get scanned.
+function ConvertTo-UInt32Address {
+    param([Parameter(Mandatory)][string]$IPAddress)
+    $bytes = [System.Net.IPAddress]::Parse($IPAddress).GetAddressBytes()
+    if ([System.BitConverter]::IsLittleEndian) { [Array]::Reverse($bytes) }
+    return [System.BitConverter]::ToUInt32($bytes, 0)
+}
+
+function ConvertFrom-UInt32Address {
+    param([Parameter(Mandatory)][uint32]$Value)
+    $bytes = [System.BitConverter]::GetBytes($Value)
+    if ([System.BitConverter]::IsLittleEndian) { [Array]::Reverse($bytes) }
+    return ([System.Net.IPAddress]::new($bytes)).ToString()
+}
+
+function Get-PrefixMask {
+    param([Parameter(Mandatory)][int]$PrefixLength)
+    if ($PrefixLength -le 0) { return [uint32]0 }
+    if ($PrefixLength -ge 32) { return [uint32]4294967295 }
+    return [uint32]((([uint64]4294967295) -shl (32 - $PrefixLength)) -band [uint64]4294967295)
+}
+
+function Get-SubnetScanTarget {
+    <#
+    .SYNOPSIS
+        Returns the list of host addresses (as UInt32 values) to scan within a subnet,
+        derived from the real network/broadcast bounds and bounded by scan depth.
+    .DESCRIPTION
+        Usable hosts are the addresses strictly between the network and broadcast
+        addresses. Quick samples up to 8 hosts spread across the range; Medium takes the
+        first 50; Full takes all usable hosts up to MaxScanHosts (a /22 by default).
+    #>
+    param(
+        [Parameter(Mandatory)][uint32]$NetworkValue,
+        [Parameter(Mandatory)][uint32]$BroadcastValue,
+        [ValidateSet('Quick', 'Medium', 'Full')][string]$ScanDepth = 'Quick',
+        [int]$MaxScanHosts = 1022
+    )
+
+    [int64]$firstHost   = [int64]$NetworkValue + 1
+    [int64]$lastHost    = [int64]$BroadcastValue - 1
+    [int64]$usableCount = if ($lastHost -ge $firstHost) { $lastHost - $firstHost + 1 } else { 0 }
+
+    $hostValues = [System.Collections.Generic.List[uint32]]::new()
+    if ($usableCount -le 0) {
+        # point-to-point (/31) or single host (/32): nothing to sweep
+    }
+    elseif ($ScanDepth -eq 'Quick') {
+        $sampleCount = [int][Math]::Min(8, $usableCount)
+        for ($s = 0; $s -lt $sampleCount; $s++) {
+            $offset = if ($sampleCount -eq 1) { 0 } else { [int64][Math]::Round(($s * ($usableCount - 1)) / ($sampleCount - 1)) }
+            $hostValues.Add([uint32]($firstHost + $offset))
+        }
+    }
+    else {
+        $limit = if ($ScanDepth -eq 'Medium') {
+            [int64][Math]::Min(50, $usableCount)
+        } else {
+            [int64][Math]::Min($MaxScanHosts, $usableCount)
+        }
+        for ($h = 0; $h -lt $limit; $h++) {
+            $hostValues.Add([uint32]($firstHost + $h))
+        }
+    }
+
+    return $hostValues.ToArray()
+}
+
+# Allow the Pester suite to dot-source this script for the CIDR helper functions above
+# without launching the interactive wizard (which performs a live network scan).
+if ($MyInvocation.InvocationName -eq '.') { return }
+
 # Import the module
-$modulePath = Join-Path $PSScriptRoot '..\NetDiagram-PS\NetDiagram-PS.psd1'
+$modulePath = Join-Path $PSScriptRoot '..' 'NetDiagram-PS' 'NetDiagram-PS.psd1'
 if (-not (Test-Path $modulePath)) {
     Write-Host "✗ Module not found at: $modulePath" -ForegroundColor Red
     Write-Host "  Please run this script from the examples/ folder or ensure NetDiagram-PS module is installed." -ForegroundColor Yellow
@@ -182,10 +258,19 @@ $nodes = @()
 $edges = @()
 $subnets = @()
 
-# Calculate subnet
-$ipParts = $myIP.Split('.')
-$subnet = "$($ipParts[0]).$($ipParts[1]).$($ipParts[2])"
-$cidr = "$subnet.0/$prefix"
+# Calculate subnet from the actual IP + prefix (real CIDR math, not a /24 assumption)
+$prefixInt = [int]$prefix
+if ($prefixInt -lt 0 -or $prefixInt -gt 32) {
+    Write-Host "      Prefix /$prefixInt is invalid; defaulting to /24" -ForegroundColor Yellow
+    $prefixInt = 24
+}
+
+$ipValue        = ConvertTo-UInt32Address $myIP
+$mask           = Get-PrefixMask -PrefixLength $prefixInt
+$networkValue   = $ipValue -band $mask
+$broadcastValue = [uint32](($networkValue -bor ((-bnot $mask) -band [uint32]4294967295)))
+$networkAddress = ConvertFrom-UInt32Address $networkValue
+$cidr           = "$networkAddress/$prefixInt"
 
 $subnets += [pscustomobject]@{
     CIDR = $cidr
@@ -293,19 +378,33 @@ Write-Host "      Created base topology with $($nodes.Count) nodes" -ForegroundC
 # Step 3: Scan for additional devices
 Write-Host "`n[3/5] Scanning for other devices on your network..." -ForegroundColor Yellow
 
-$scanRanges = switch ($ScanDepth) {
-    'Quick'  { @(1, 2, 10, 20, 50, 100, 200, 254) }
-    'Medium' { 1..50 }
-    'Full'   { 1..254 }
+# Enumerate real host addresses from the actual prefix. Usable hosts are between the
+# network and broadcast addresses (for /31 and /32 there is no usable-host range).
+$maxScanHosts = 1022  # a /22 worth of hosts - the scan cap for large subnets
+[int64]$usableCount = [int64]$broadcastValue - [int64]$networkValue - 1
+if ($usableCount -lt 0) { $usableCount = 0 }
+
+if ($usableCount -le 0) {
+    Write-Host "      Subnet $cidr has no scannable host range (point-to-point or /32)" -ForegroundColor Yellow
+}
+elseif ($ScanDepth -eq 'Full' -and $usableCount -gt $maxScanHosts) {
+    Write-Host "      ⚠ Subnet /$prefixInt has $usableCount usable hosts; capping scan to the first $maxScanHosts (a /22)." -ForegroundColor Yellow
+    Write-Host "        Use a smaller subnet or an inventory file for a full sweep." -ForegroundColor Yellow
 }
 
-Write-Host "      Scan depth: $ScanDepth ($($scanRanges.Count) addresses)" -ForegroundColor Cyan
+$hostValues = Get-SubnetScanTarget -NetworkValue $networkValue -BroadcastValue $broadcastValue -ScanDepth $ScanDepth -MaxScanHosts $maxScanHosts
+
+# Materialize scan targets as IP strings before the parallel block (the CIDR helper
+# functions are not available inside ForEach-Object -Parallel runspaces).
+$scanTargets = @($hostValues | ForEach-Object { ConvertFrom-UInt32Address $_ })
+
+Write-Host "      Scan depth: $ScanDepth ($($scanTargets.Count) addresses in $cidr)" -ForegroundColor Cyan
 Write-Host "      This may take 10-60 seconds..." -ForegroundColor Gray
 
 $discovered = [System.Collections.Concurrent.ConcurrentBag[object]]::new()
 
-$scanRanges | ForEach-Object -Parallel {
-    $testIP = "$using:subnet.$_"
+$scanTargets | ForEach-Object -Parallel {
+    $testIP = $_
 
     # Skip IPs we already have
     if ($testIP -in @($using:myIP, $using:gateway) + $using:dnsServers) {

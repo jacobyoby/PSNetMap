@@ -73,5 +73,5 @@ For the easiest experience, run the wizard:
 
 ---
 
-**Last Updated:** 2025-11-01
-**Module Version:** 1.0.1
+**Last Updated:** 2025-11-02
+**Module Version:** 1.1.0

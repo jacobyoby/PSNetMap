@@ -31,7 +31,7 @@ The wizard performs the following actions:
 
 ## Prerequisites
 
-- **PowerShell 7.0+** (required, cross-platform)
+- **PowerShell 7.4+** (required, cross-platform — 7.4 is the current LTS and provides `Test-Connection -TimeoutSeconds`)
   - Windows: https://aka.ms/powershell
   - macOS: `brew install --cask powershell` or download from https://aka.ms/powershell
   - Linux: Follow instructions at https://aka.ms/powershell
@@ -44,6 +44,26 @@ The wizard performs the following actions:
 
 - **Pester 5.0+** (optional, only for running tests)
   - Install: `Install-Module -Name Pester -MinimumVersion 5.0.0`
+
+---
+
+## Installation
+
+### From PowerShell Gallery (once published)
+
+```powershell
+Install-Module -Name NetDiagram-PS -Scope CurrentUser
+Import-Module NetDiagram-PS
+```
+
+### From source (clone)
+
+```powershell
+git clone https://github.com/jacobyoby/PSNetMap.git
+Import-Module ./PSNetMap/NetDiagram-PS/NetDiagram-PS.psd1
+```
+
+See [PUBLISHING.md](PUBLISHING.md) for how the module is packaged and released to the Gallery.
 
 ---
 
@@ -360,7 +380,7 @@ Contributions welcome! Please:
 
 ## License
 
-This project is provided as-is for educational and professional use.
+Released under the [MIT License](LICENSE). Copyright (c) 2025 Jacob Yoby.
 
 ---
 

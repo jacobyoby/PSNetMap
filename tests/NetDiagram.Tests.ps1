@@ -461,3 +461,179 @@ Describe 'Test-IPInSubnet (private helper)' {
         }
     }
 }
+
+Describe 'Get-SnmpNeighbors node eligibility (#1 regression)' {
+    BeforeEach {
+        # Empty credential map is valid; -TryPublic supplies the community so no
+        # SecretManagement dependency is needed for the test.
+        $script:CredMapPath = Join-Path $script:TestDataPath 'credmap-empty.json'
+        '{}' | Out-File -FilePath $script:CredMapPath -Force
+    }
+
+    It 'Queries nodes with unknown reachability (Reachable = $null) by default' {
+        # Import-Inventory leaves Reachable = $null; these must still be queried.
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        Mock Invoke-SnmpWalk { @() } -ModuleName 'NetDiagram-PS'
+
+        $null = $topology | Get-SnmpNeighbors -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+
+        Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 3 -Exactly
+    }
+
+    It 'Skips untested nodes when -OnlyReachable is specified' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        Mock Invoke-SnmpWalk { @() } -ModuleName 'NetDiagram-PS'
+
+        $null = $topology | Get-SnmpNeighbors -CredentialMapPath $script:CredMapPath -TryPublic -OnlyReachable -WarningAction SilentlyContinue
+
+        Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 0 -Exactly
+    }
+
+    It 'Does not query nodes explicitly marked unreachable' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        foreach ($n in $topology.Nodes) { $n.Reachable = $false }
+        $topology.Nodes[0].Reachable = $true
+        Mock Invoke-SnmpWalk { @() } -ModuleName 'NetDiagram-PS'
+
+        $null = $topology | Get-SnmpNeighbors -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+
+        # Only the single reachable/unmarked node should be queried
+        Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 1 -Exactly
+    }
+}
+
+Describe 'Invoke-SnmpWalk parameter validation (#6 regression)' {
+    It 'Rejects an invalid SNMP version' {
+        { Invoke-SnmpWalk -TargetIP '192.0.2.1' -Community 'public' -Version 'v9' } | Should -Throw
+    }
+
+    It 'Rejects a TargetIP beginning with a dash (argument-injection guard)' {
+        { Invoke-SnmpWalk -TargetIP '-oOutputFile' -Community 'public' } | Should -Throw
+    }
+
+    It 'Rejects a community beginning with a dash' {
+        { Invoke-SnmpWalk -TargetIP '192.0.2.1' -Community '-c' } | Should -Throw
+    }
+
+    It 'Rejects a non-numeric OID' {
+        { Invoke-SnmpWalk -TargetIP '192.0.2.1' -Community 'public' -OID 'not.an.oid' } | Should -Throw
+    }
+
+    It 'Accepts a valid FQDN target' {
+        # Valid params get past binding; with the binary mocked away it throws the
+        # "not found" error, which proves validation passed.
+        Mock Get-Command { $null } -ModuleName 'NetDiagram-PS' -ParameterFilter { $Name -like 'snmpwalk*' }
+        { Invoke-SnmpWalk -TargetIP 'switch01.example.com' -Community 'public' } |
+            Should -Throw -ExpectedMessage '*snmpwalk not found*'
+    }
+}
+
+Describe 'Invoke-PortScan parameter validation (#7 regression)' {
+    It 'Rejects a port outside 1-65535' {
+        { Invoke-PortScan -IPAddress '192.0.2.1' -Ports 70000 } | Should -Throw
+    }
+
+    It 'Rejects a timeout outside 1-60000 (guards against indefinite hang)' {
+        { Invoke-PortScan -IPAddress '192.0.2.1' -TimeoutMs 0 } | Should -Throw
+    }
+}
+
+Describe 'Export-DrawIO duplicate-IP handling (#8 regression)' {
+    It 'Emits unique mxCell ids and de-duplicates nodes sharing an IP' {
+        $topology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP = '192.168.1.5'; Hostname = 'dup-a'; Role = 'switch'; Vendor = 'x'; OS = 'x'; Layer = 'Access'; Reachable = $true }
+                [pscustomobject]@{ IP = '192.168.1.5'; Hostname = 'dup-b'; Role = 'switch'; Vendor = 'x'; OS = 'x'; Layer = 'Access'; Reachable = $true }
+                [pscustomobject]@{ IP = '192.168.1.6'; Hostname = 'uniq';  Role = 'server'; Vendor = 'x'; OS = 'x'; Layer = 'Servers'; Reachable = $true }
+            )
+            Edges   = @()
+            Subnets = @()
+        }
+
+        $drawioPath = Join-Path $script:TestDataPath 'dup-ip.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath -WarningAction SilentlyContinue
+
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $ids = @($xml.SelectNodes('//mxCell') | ForEach-Object { $_.id })
+
+        # All mxCell ids must be unique
+        ($ids | Sort-Object -Unique).Count | Should -Be $ids.Count
+
+        # Duplicate IP collapsed to a single node vertex (2 unique IPs)
+        @($xml.SelectNodes("//mxCell[@vertex='1']")).Count | Should -Be 2
+    }
+}
+
+Describe 'Export-DrawIO subnet container parenting (#9 regression)' {
+    It 'Parents nodes into the matching subnet container instead of the root' {
+        # Test inventory nodes live in 192.168.1.0/24 and there is a matching subnet.
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $drawioPath = Join-Path $script:TestDataPath 'containers.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath
+
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $container = @($xml.SelectNodes("//mxCell[contains(@style,'swimlane')]"))[0]
+        $container | Should -Not -BeNullOrEmpty
+
+        $nodeCells = @($xml.SelectNodes("//mxCell[@vertex='1' and not(contains(@style,'swimlane'))]"))
+        $nodeCells.Count | Should -Be 3
+        foreach ($n in $nodeCells) {
+            $n.parent | Should -Be $container.id
+        }
+    }
+}
+
+Describe 'Quick-start wizard CIDR math (#4 regression)' {
+    BeforeAll {
+        # Dot-source the example; the dot-source guard returns before the wizard body
+        # runs, so only the pure CIDR helper functions get defined.
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
+    }
+
+    It 'Computes the correct network address for a non-/24 prefix' {
+        $ipValue = ConvertTo-UInt32Address '10.0.5.37'
+        $mask    = Get-PrefixMask -PrefixLength 22
+        $network = ConvertFrom-UInt32Address ([uint32]($ipValue -band $mask))
+        $network | Should -Be '10.0.4.0'
+    }
+
+    It 'Round-trips an address through UInt32 conversion' {
+        ConvertFrom-UInt32Address (ConvertTo-UInt32Address '192.168.1.200') | Should -Be '192.168.1.200'
+    }
+
+    It 'Enumerates all usable hosts of a /24 on Full depth' {
+        $net = ConvertTo-UInt32Address '192.168.1.0'
+        $bc  = ConvertTo-UInt32Address '192.168.1.255'
+        $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full')
+        $targets.Count | Should -Be 254
+        (ConvertFrom-UInt32Address $targets[0])  | Should -Be '192.168.1.1'
+        (ConvertFrom-UInt32Address $targets[-1]) | Should -Be '192.168.1.254'
+    }
+
+    It 'Caps a large subnet (/16) at a /22 worth of hosts on Full depth' {
+        $net = ConvertTo-UInt32Address '10.1.0.0'
+        $bc  = ConvertTo-UInt32Address '10.1.255.255'
+        $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full' -MaxScanHosts 1022)
+        $targets.Count | Should -Be 1022
+    }
+
+    It 'Samples at most 8 in-range hosts on Quick depth' {
+        $net = ConvertTo-UInt32Address '192.168.1.0'
+        $bc  = ConvertTo-UInt32Address '192.168.1.255'
+        $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Quick')
+        $targets.Count | Should -BeLessOrEqual 8
+        $targets.Count | Should -BeGreaterThan 0
+        foreach ($t in $targets) {
+            (ConvertTo-UInt32Address (ConvertFrom-UInt32Address $t)) | Should -BeGreaterThan $net
+            (ConvertTo-UInt32Address (ConvertFrom-UInt32Address $t)) | Should -BeLessThan $bc
+        }
+    }
+
+    It 'Returns no targets for a /31 point-to-point link' {
+        $net = ConvertTo-UInt32Address '10.0.0.0'
+        $bc  = ConvertTo-UInt32Address '10.0.0.1'
+        $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full')
+        $targets.Count | Should -Be 0
+    }
+}

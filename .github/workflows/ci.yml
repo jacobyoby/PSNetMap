@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, improve-and-package ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Pester (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate module manifest
+        shell: pwsh
+        run: Test-ModuleManifest ./NetDiagram-PS/NetDiagram-PS.psd1
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -Scope CurrentUser -SkipPublisherCheck
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests/NetDiagram.Tests.ps1'
+          $config.Output.Verbosity = 'Detailed'
+          $config.Run.Exit = $true
+          Invoke-Pester -Configuration $config
+
+  lint:
+    name: PSScriptAnalyzer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Run analyzer (fail on errors)
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path ./NetDiagram-PS -Recurse -Severity Error
+          $results | Format-Table -AutoSize
+          if ($results) { throw "PSScriptAnalyzer reported $($results.Count) error(s)" }

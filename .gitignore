@@ -38,3 +38,9 @@ dist/
 
 # PowerShell module cache
 PSGetModuleInfo.xml
+
+# Code review artifacts / logs (never commit)
+CODEX_REVIEW.txt
+*-review.txt
+*review*.log
+review-*.md

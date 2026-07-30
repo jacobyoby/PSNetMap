@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Module-level variables
-$script:ModuleVersion = '1.2.0'
+$script:ModuleVersion = '1.3.0'
 
 #region Helper Functions
 
@@ -222,14 +222,23 @@ function Invoke-SnmpWalk {
         Calls snmpwalk directly (must be in PATH) with specified OID and credentials.
         Resolves 'snmpwalk' on macOS/Linux and 'snmpwalk.exe' on Windows.
         Returns raw output lines.
+
+        SECURITY - PROCESS LIST EXPOSURE (known limitation): snmpwalk receives the
+        community string as a command-line argument ('-c <community>'). While it runs,
+        the community is visible to any local user who can list processes (ps, Get-Process
+        with command-line access, /proc). This is inherent to shelling out to net-snmp and
+        cannot be avoided without a native SNMP client. Verbose logging in this function
+        redacts the community (prints '-c ****'), but the process arguments themselves are
+        not redacted. Treat SNMP v1/v2c community strings as low-secrecy and prefer SNMPv3
+        with authentication for anything sensitive.
     .PARAMETER TargetIP
-        IP address to query
+        IP address or hostname (FQDN) to query. Must not begin with '-'.
     .PARAMETER Community
-        SNMP community string
+        SNMP community string. Must not begin with '-' (argument-injection guard).
     .PARAMETER OID
-        OID to walk (default: LLDP remote table)
+        OID to walk (default: LLDP remote table). Digits and dots only.
     .PARAMETER Version
-        SNMP version (default: v2c)
+        SNMP version: v1, v2c, or v3 (default: v2c)
     .PARAMETER TimeoutSeconds
         Timeout in seconds (default: 2)
     .EXAMPLE
@@ -238,26 +247,41 @@ function Invoke-SnmpWalk {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
+        [ValidateScript({
+            if ($_ -match '^-') { throw "TargetIP must not begin with '-'." }
+            if ($_ -notmatch '^(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*)$') {
+                throw "TargetIP '$_' is not a valid IPv4 address or hostname."
+            }
+            $true
+        })]
         [string]$TargetIP,
 
         [Parameter(Mandatory)]
+        [ValidateScript({
+            if ($_ -match '^-') { throw "Community must not begin with '-' (argument-injection guard)." }
+            $true
+        })]
         [string]$Community,
 
         [Parameter()]
+        [ValidatePattern('^\d+(\.\d+)*$')]
         [string]$OID = '1.0.8802.1.1.2.1.4',
 
         [Parameter()]
+        [ValidateSet('v1', 'v2c', 'v3')]
         [string]$Version = 'v2c',
 
         [Parameter()]
+        [ValidateRange(1, 300)]
         [int]$TimeoutSeconds = 2
     )
 
     # Locate the snmpwalk binary. It is 'snmpwalk.exe' on Windows and 'snmpwalk'
     # on macOS/Linux, so probe for both rather than assuming the Windows name.
+    # Restrict to Application so a same-named function/alias/script cannot be invoked.
     $snmpWalkCmd = $null
     foreach ($candidate in @('snmpwalk', 'snmpwalk.exe')) {
-        $found = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        $found = Get-Command -Name $candidate -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($found) {
             $snmpWalkCmd = $found.Source
             break
@@ -276,7 +300,17 @@ function Invoke-SnmpWalk {
             $OID
         )
 
-        Write-Verbose "Running: $snmpWalkCmd $($arguments -join ' ')"
+        # Never emit the community string in verbose output. Redact '-c <community>'
+        # to '-c ****'. (The community is still visible in the process argument list
+        # while snmpwalk runs - see the SECURITY note in the function help.)
+        $redactedArgs = @(
+            '-' + $Version.ToLower()
+            '-c', '****'
+            '-t', $TimeoutSeconds.ToString()
+            $TargetIP
+            $OID
+        )
+        Write-Verbose "Running: $snmpWalkCmd $($redactedArgs -join ' ')"
 
         $output = & $snmpWalkCmd @arguments 2>&1
 
@@ -297,17 +331,34 @@ function Invoke-SnmpWalk {
 function Get-SnmpNeighbors {
     <#
     .SYNOPSIS
-        Discovers neighbors via SNMP LLDP/CDP
+        Discovers neighbors via SNMP LLDP/CDP (best-effort MVP)
     .DESCRIPTION
-        Queries reachable nodes for LLDP neighbor information via SNMP.
+        Queries nodes for LLDP neighbor information via SNMP.
         Uses credential map to resolve community strings from SecretManagement.
         Adds discovered edges to the topology with L2-SNMP confidence.
+
+        NODE ELIGIBILITY: By default every node is queried EXCEPT nodes that have been
+        explicitly marked unreachable (Reachable -eq $false). Nodes with unknown
+        reachability (Reachable -eq $null, e.g. straight after Import-Inventory) ARE
+        queried, so the documented "import inventory then discover via SNMP" workflow
+        works without first running Test-DeviceReachability. Pass -OnlyReachable to
+        restrict querying to nodes proven reachable (Reachable -eq $true).
+
+        PARSING IS BEST-EFFORT (MVP): the neighbor parser scans snmpwalk output for the
+        first IPv4-looking token on each line and only creates an edge when that address
+        already exists as a node in the topology. It does NOT fully decode the LLDP/CDP
+        MIB rows (chassis-id / management-address / port-id sub-OIDs are not joined). It
+        can miss neighbors and, on unusual output, misattribute a link. Treat the SNMP
+        edges as hints to verify, not authoritative topology.
     .PARAMETER Topology
         Topology object with nodes
     .PARAMETER CredentialMapPath
         Path to credential map JSON file
     .PARAMETER OID
         SNMP OID to walk (default: LLDP remote table)
+    .PARAMETER OnlyReachable
+        Only query nodes proven reachable (Reachable -eq $true). Off by default so that
+        freshly imported inventory (Reachable = $null) is still queried.
     .PARAMETER TryPublic
         If no credentials found for a node, try the common "public" community string.
         WARNING: This may be logged by security systems. Only use on networks you own.
@@ -317,6 +368,10 @@ function Get-SnmpNeighbors {
         $topo = $topo | Get-SnmpNeighbors -CredentialMapPath '.\credmap.json' -TryPublic
 
         Tries user credentials first, falls back to "public" if none found (with warning)
+    .EXAMPLE
+        $topo = $topo | Test-DeviceReachability | Get-SnmpNeighbors -CredentialMapPath '.\credmap.json' -OnlyReachable
+
+        Ping-tests first, then queries only the nodes that answered.
     #>
     [CmdletBinding()]
     param(
@@ -328,6 +383,9 @@ function Get-SnmpNeighbors {
 
         [Parameter()]
         [string]$OID = '1.0.8802.1.1.2.1.4',
+
+        [Parameter()]
+        [switch]$OnlyReachable,
 
         [Parameter()]
         [switch]$TryPublic
@@ -366,19 +424,29 @@ All SNMP attempts will be logged to verbose output.
 "@
         }
 
-        # Only query reachable nodes
-        $reachableNodes = @($Topology.Nodes | Where-Object { $_.Reachable -eq $true })
-        if ($reachableNodes.Count -eq 0) {
-            Write-Warning "No reachable nodes to query via SNMP"
+        # Decide which nodes to query. Default: everything that is not explicitly
+        # unreachable (so freshly imported inventory with Reachable = $null is eligible).
+        # -OnlyReachable narrows to nodes proven reachable (Reachable -eq $true).
+        if ($OnlyReachable) {
+            $nodesToQuery = @($Topology.Nodes | Where-Object { $_.Reachable -eq $true })
+            $eligibilityDesc = 'reachable'
+        }
+        else {
+            $nodesToQuery = @($Topology.Nodes | Where-Object { $_.Reachable -ne $false })
+            $eligibilityDesc = 'eligible (reachable or untested)'
+        }
+
+        if ($nodesToQuery.Count -eq 0) {
+            Write-Warning "No $eligibilityDesc nodes to query via SNMP"
             return $Topology
         }
 
-        Write-Verbose "Querying SNMP neighbors for $($reachableNodes.Count) reachable nodes"
+        Write-Verbose "Querying SNMP neighbors for $($nodesToQuery.Count) $eligibilityDesc node(s)"
 
         $discoveredEdges = [System.Collections.ArrayList]::new()
         $publicAttempts = 0
 
-        foreach ($node in $reachableNodes) {
+        foreach ($node in $nodesToQuery) {
             # Resolve SNMP community for this node
             $community = $null
             $communitySecret = $null
@@ -433,39 +501,61 @@ All SNMP attempts will be logged to verbose output.
             Write-Verbose "  Querying $($node.IP) with community from $source"
             $output = Invoke-SnmpWalk -TargetIP $node.IP -Community $community -OID $OID -ErrorAction SilentlyContinue
 
-            if ($output.Count -eq 0) {
+            if ($null -eq $output -or @($output).Count -eq 0) {
                 Write-Verbose "No SNMP data returned from $($node.IP)"
                 continue
             }
 
-            # Parse LLDP output (simplified parser for MVP)
-            # Expected format: iso.0.8802.1.1.2.1.4.1.1.X.Y.Z = Type: Value
+            # Parse LLDP/CDP output. BEST-EFFORT MVP (see function help): we do not fully
+            # decode the LLDP MIB rows. For each output line we look only at the VALUE
+            # portion (right of '='), never the OID itself (the numeric OID contains
+            # dotted-decimal runs that would otherwise be mistaken for IPv4 addresses),
+            # extract an octet-validated IPv4 management address, and only create an edge
+            # when that address is already a known node.
             foreach ($line in $output) {
-                if ($line -match '(\d+\.\d+\.\d+\.\d+)') {
+                $value = if ($line -match '=\s*(.+)$') { $matches[1] } else { '' }
+                if ([string]::IsNullOrWhiteSpace($value)) { continue }
+
+                $targetIP = $null
+
+                # net-snmp renders an LLDP management address either as a dotted quad
+                # (sometimes prefixed 'IpAddress:') or as a 4-octet Hex-STRING.
+                if ($value -match '(?:IpAddress:\s*)?\b((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\b') {
                     $targetIP = $matches[1]
-
-                    # Check if target IP is in our topology
-                    $targetNode = $Topology.Nodes | Where-Object { $_.IP -eq $targetIP }
-                    if (-not $targetNode) {
-                        continue
-                    }
-
-                    # Extract interface label if possible
-                    $label = 'LLDP'
-                    if ($line -match 'ifName|Interface|Port\s*[:=]\s*(\S+)') {
-                        $label = $matches[1]
-                    }
-
-                    $edge = [pscustomobject]@{
-                        SourceIP   = $node.IP
-                        TargetIP   = $targetIP
-                        Label      = $label
-                        Source     = 'SNMP'
-                        Confidence = 'L2-SNMP'
-                    }
-
-                    $null = $discoveredEdges.Add($edge)
                 }
+                elseif ($value -match 'Hex-STRING:\s*([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})') {
+                    $targetIP = @(
+                        [Convert]::ToInt32($matches[1], 16)
+                        [Convert]::ToInt32($matches[2], 16)
+                        [Convert]::ToInt32($matches[3], 16)
+                        [Convert]::ToInt32($matches[4], 16)
+                    ) -join '.'
+                }
+
+                if ([string]::IsNullOrWhiteSpace($targetIP)) { continue }
+
+                # Skip self-loops.
+                if ($targetIP -eq $node.IP) { continue }
+
+                # Only accept addresses that map to a node already in the topology.
+                $targetNode = $Topology.Nodes | Where-Object { $_.IP -eq $targetIP }
+                if (-not $targetNode) { continue }
+
+                # Best-effort interface label extraction.
+                $label = 'LLDP'
+                if ($value -match '(?:ifName|Interface|Port(?:Id)?)\s*[:=]\s*"?([^"\s]+)"?') {
+                    $label = $matches[1]
+                }
+
+                $edge = [pscustomobject]@{
+                    SourceIP   = $node.IP
+                    TargetIP   = $targetIP
+                    Label      = $label
+                    Source     = 'SNMP'
+                    Confidence = 'L2-SNMP'
+                }
+
+                $null = $discoveredEdges.Add($edge)
             }
         }
 
@@ -658,14 +748,29 @@ function Export-DrawIO {
             throw "Invalid topology object"
         }
 
-        # Build node ID map
+        # De-duplicate nodes by IP first. Duplicate IPs would otherwise share a single
+        # node-ID map entry yet each still be rendered, emitting multiple mxCells with
+        # the same id - which is invalid draw.io. Keep the first occurrence and warn.
+        $uniqueNodes = [System.Collections.Generic.List[object]]::new()
+        $seenIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($node in $Topology.Nodes) {
+            if ([string]::IsNullOrWhiteSpace($node.IP)) {
+                Write-Warning "Skipping node with no IP address"
+                continue
+            }
+            if (-not $seenIPs.Add([string]$node.IP)) {
+                Write-Warning "Duplicate IP '$($node.IP)' - keeping first occurrence, skipping duplicate node"
+                continue
+            }
+            $uniqueNodes.Add($node)
+        }
+
+        # Build node ID map (one entry per unique IP)
         $nodeIDMap = @{}
         $nextID = 2  # Start after mxCell id="0" and id="1"
 
-        foreach ($node in $Topology.Nodes) {
-            if (-not [string]::IsNullOrWhiteSpace($node.IP)) {
-                $nodeIDMap[$node.IP] = $nextID++
-            }
+        foreach ($node in $uniqueNodes) {
+            $nodeIDMap[$node.IP] = $nextID++
         }
 
         # Layer order for Y-axis positioning
@@ -674,7 +779,7 @@ function Export-DrawIO {
         # Group nodes by layer
         $nodesByLayer = @{}
         foreach ($layer in $layerOrder) {
-            $nodesByLayer[$layer] = @($Topology.Nodes | Where-Object { $_.Layer -eq $layer })
+            $nodesByLayer[$layer] = @($uniqueNodes | Where-Object { $_.Layer -eq $layer })
         }
 
         # Start building XML
@@ -711,15 +816,50 @@ function Export-DrawIO {
 
         $nextID = $containerID
 
+        # Map each node to the first subnet container whose CIDR contains it, so nodes
+        # are parented/positioned inside the right swimlane instead of always parent="1".
+        $nodeContainer = @{}
+        foreach ($node in $uniqueNodes) {
+            foreach ($subnet in $Topology.Subnets) {
+                if ($subnetContainers.ContainsKey($subnet.CIDR) -and (Test-IPInSubnet -IP $node.IP -CIDR $subnet.CIDR)) {
+                    $nodeContainer[$node.IP] = $subnetContainers[$subnet.CIDR]
+                    break
+                }
+            }
+        }
+
+        # Layout bookkeeping: per-container child index, and a base Y for unmatched
+        # (canvas-level) nodes placed below the container grid so nothing overlaps.
+        $containerChildCount = @{}
+        $containerRows = [Math]::Ceiling($subnetContainers.Count / 2.0)
+        $unmatchedBaseY = 20 + ([int]$containerRows * 600) + 40
+
         # Add nodes with enhanced styles and metadata
         foreach ($layer in $layerOrder) {
             $nodesInLayer = $nodesByLayer[$layer]
-            $yPos = 60 + ($layerOrder.IndexOf($layer) * 130)
+            $layerIndex = $layerOrder.IndexOf($layer)
 
             for ($i = 0; $i -lt $nodesInLayer.Count; $i++) {
                 $node = $nodesInLayer[$i]
-                $xPos = 60 + ($i * 190)
                 $nodeID = $nodeIDMap[$node.IP]
+
+                # Decide parent container and geometry. Nodes matched to a subnet go
+                # inside that swimlane (geometry relative to the container); unmatched
+                # nodes are laid out on the open canvas by layer, below the containers.
+                if ($nodeContainer.ContainsKey($node.IP)) {
+                    $parentID = $nodeContainer[$node.IP]
+                    $childIndex = if ($containerChildCount.ContainsKey($parentID)) { $containerChildCount[$parentID] } else { 0 }
+                    $containerChildCount[$parentID] = $childIndex + 1
+                    $col = $childIndex % 4
+                    $row = [Math]::Floor($childIndex / 4)
+                    $xPos = 20 + ($col * 190)
+                    $yPos = 40 + ($row * 110)
+                }
+                else {
+                    $parentID = 1
+                    $xPos = 60 + ($i * 190)
+                    $yPos = $unmatchedBaseY + ($layerIndex * 130)
+                }
 
                 # Get role-specific icon shape and colors
                 $shapeConfig = switch ($node.Role) {
@@ -765,7 +905,7 @@ function Export-DrawIO {
                 )
                 $tooltip = [System.Security.SecurityElement]::Escape(($tooltipParts -join "`n"))
 
-                $null = $xml.AppendLine("        <mxCell id=`"$nodeID`" value=`"$label`" style=`"$nodeStyle`" parent=`"1`" vertex=`"1`">")
+                $null = $xml.AppendLine("        <mxCell id=`"$nodeID`" value=`"$label`" style=`"$nodeStyle`" parent=`"$parentID`" vertex=`"1`">")
                 $null = $xml.AppendLine("          <mxGeometry x=`"$xPos`" y=`"$yPos`" width=`"140`" height=`"80`" as=`"geometry`"/>")
                 $null = $xml.AppendLine('        </mxCell>')
 
@@ -1236,7 +1376,8 @@ function Resolve-IPHostname {
     .PARAMETER IPAddress
         IP address or array of IP addresses to resolve
     .PARAMETER TimeoutSeconds
-        DNS query timeout in seconds (default: 2)
+        DNS query timeout in seconds, 1-300 (default: 2). Enforced with an async lookup;
+        addresses that do not resolve within the window are returned with Success = $false.
     .EXAMPLE
         Resolve-IPHostname -IPAddress '8.8.8.8'
 
@@ -1253,19 +1394,36 @@ function Resolve-IPHostname {
         [string[]]$IPAddress,
 
         [Parameter()]
+        [ValidateRange(1, 300)]
         [int]$TimeoutSeconds = 2
     )
 
     process {
         foreach ($ip in $IPAddress) {
             try {
-                $result = [System.Net.Dns]::GetHostEntry($ip)
+                # Honor TimeoutSeconds: resolve asynchronously and wait at most
+                # $TimeoutSeconds so a slow or unreachable resolver cannot hang the
+                # pipeline. On timeout we return a failure object (the background task
+                # is abandoned).
+                $task = [System.Net.Dns]::GetHostEntryAsync($ip)
 
-                [pscustomobject]@{
-                    IPAddress = $ip
-                    Hostname  = $result.HostName
-                    Aliases   = $result.Aliases
-                    Success   = $true
+                if ($task.Wait([TimeSpan]::FromSeconds($TimeoutSeconds))) {
+                    $result = $task.Result
+                    [pscustomobject]@{
+                        IPAddress = $ip
+                        Hostname  = $result.HostName
+                        Aliases   = $result.Aliases
+                        Success   = $true
+                    }
+                }
+                else {
+                    Write-Verbose "DNS lookup for $ip timed out after $TimeoutSeconds second(s)"
+                    [pscustomobject]@{
+                        IPAddress = $ip
+                        Hostname  = $null
+                        Aliases   = @()
+                        Success   = $false
+                    }
                 }
             }
             catch {
@@ -1392,9 +1550,11 @@ function Invoke-PortScan {
     .PARAMETER IPAddress
         Target IP address or array of IP addresses
     .PARAMETER Ports
-        Array of ports to scan (default: common ports 21,22,23,80,443,161,3389,8080)
+        Array of TCP ports to scan, 1-65535 (default: common TCP service ports).
+        Note: SNMP (161) is UDP and is deliberately NOT in the defaults - a TCP probe of
+        161 does not detect SNMP. Use Invoke-SnmpWalk for SNMP.
     .PARAMETER TimeoutMs
-        Connection timeout in milliseconds (default: 1000)
+        Per-port connection timeout in milliseconds, 1-60000 (default: 1000)
     .PARAMETER GrabBanners
         Attempt to grab service banners from open ports
     .EXAMPLE
@@ -1412,9 +1572,11 @@ function Invoke-PortScan {
         [string[]]$IPAddress,
 
         [Parameter()]
-        [int[]]$Ports = @(21, 22, 23, 25, 80, 443, 161, 445, 3389, 8080, 8443),
+        [ValidateRange(1, 65535)]
+        [int[]]$Ports = @(21, 22, 23, 25, 80, 443, 445, 3389, 8080, 8443),
 
         [Parameter()]
+        [ValidateRange(1, 60000)]
         [int]$TimeoutMs = 1000,
 
         [Parameter()]

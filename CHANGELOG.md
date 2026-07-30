@@ -5,6 +5,43 @@ All notable changes to NetDiagram-PS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-30
+
+### Fixed
+- **SNMP discovery now works straight after `Import-Inventory`.** `Get-SnmpNeighbors`
+  only queried nodes with `Reachable -eq $true`, but freshly imported inventory has
+  `Reachable = $null`, so the documented import-then-discover workflow silently returned
+  nothing. Untested nodes are now eligible by default; only nodes proven unreachable are
+  skipped. New `-OnlyReachable` switch restores the strict behavior.
+- **Community string no longer leaked to verbose output.** `Invoke-SnmpWalk` redacts
+  `-c <community>` to `-c ****` in verbose logging. Process-list exposure (inherent to
+  shelling out to net-snmp) is now documented as a known limitation.
+- **`Export-DrawIO` duplicate-IP handling.** Duplicate device IPs overwrote the node-ID
+  map and emitted multiple `mxCell` elements with the same id (invalid draw.io). Nodes
+  are now de-duplicated by IP (first occurrence wins, with a warning).
+- **Subnet containers now contain their nodes.** Nodes are parented into the matching
+  subnet swimlane via `Test-IPInSubnet` instead of always being parented to `1`;
+  unmatched nodes are laid out on the canvas below the containers.
+- **Quick-start wizard subnet math.** The example script assumed a /24 (first three
+  octets, `.1`-`.254`). It now derives host addresses from the interface's real CIDR
+  prefix and caps scans of large subnets at a /22 (1022 hosts) with a warning. Also
+  fixed a Windows-separator `Join-Path` in the module path.
+- `Resolve-IPHostname` now honors `-TimeoutSeconds` (previously ignored) using an async
+  DNS lookup with a bounded wait.
+
+### Changed
+- **Hardened LLDP/CDP parsing.** The neighbor parser inspects only the value portion of
+  each line, validates IPv4 octets, decodes 4-octet `Hex-STRING` management addresses,
+  and skips self-loops. It remains best-effort (does not fully decode the LLDP MIB) and
+  is now clearly documented as such.
+- **`Invoke-SnmpWalk` parameter validation.** SNMP `Version` restricted to v1/v2c/v3,
+  `TargetIP` validated as IPv4/FQDN, `OID` validated as dotted-decimal, and an
+  argument-injection guard rejects values beginning with `-`. Binary resolution is
+  restricted to `-CommandType Application`.
+- **`Invoke-PortScan` validation.** `-Ports` constrained to 1-65535, `-TimeoutMs` to
+  1-60000 (previously unbounded, allowing indefinite hangs). TCP 161 removed from the
+  defaults (SNMP is UDP; a TCP probe does not detect it).
+
 ## [1.2.0] - 2025-11-02
 
 ### Fixed

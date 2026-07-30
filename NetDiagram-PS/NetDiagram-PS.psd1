@@ -1,6 +1,6 @@
 @{
     RootModule = 'NetDiagram-PS.psm1'
-    ModuleVersion = '1.2.0'
+    ModuleVersion = '1.3.0'
     GUID = 'a8f7e9c4-6d2b-4a1c-9e3f-7b8c9d0e1f2a'
     Author = 'Jacob Yoby'
     CompanyName = 'NetDiagram-PS'
@@ -42,7 +42,7 @@
             LicenseUri = 'https://github.com/jacobyoby/PSNetMap/blob/main/LICENSE'
             ProjectUri = 'https://github.com/jacobyoby/PSNetMap'
             IconUri = ''
-            ReleaseNotes = 'Version 1.2.0 - Fixed SNMP discovery on macOS/Linux (snmpwalk binary resolution), raised the minimum PowerShell version to 7.4 (Test-Connection -TimeoutSeconds), added CompatiblePSEditions, expanded the Pester suite, and documented the PowerShell Gallery publish path.'
+            ReleaseNotes = 'Version 1.3.0 - Code-review hardening. Get-SnmpNeighbors now queries untested nodes by default (Reachable = $null), fixing the import-then-discover workflow, with an -OnlyReachable opt-in switch. Invoke-SnmpWalk redacts the community string from verbose output, validates all parameters (SNMP version set, IP/FQDN, OID format, argument-injection guard), restricts binary resolution to Application, and documents process-list exposure. LLDP/CDP parsing hardened (value-only, octet-validated, Hex-STRING aware) and clearly documented as best-effort. Export-DrawIO de-duplicates node IPs and parents nodes into their matching subnet containers. Invoke-PortScan validates port/timeout ranges and drops TCP 161 (SNMP is UDP). Resolve-IPHostname now honors -TimeoutSeconds via async DNS. Example wizard uses real CIDR host enumeration (with a /22 scan cap) instead of assuming /24.'
         }
     }
 }

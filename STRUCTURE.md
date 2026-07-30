@@ -6,8 +6,12 @@ This document describes the folder structure following PowerShell module best pr
 
 ```
 PSNetMap/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                      # CI: Pester (Win/macOS/Linux) + PSScriptAnalyzer
 ├── CHANGELOG.md                        # Release history
 ├── LICENSE                             # MIT License
+├── PUBLISHING.md                       # PowerShell Gallery release process
 ├── README.md                           # Main documentation & quick start
 ├── STRUCTURE.md                        # This file
 ├── WHERE-TO-SAVE-FILES.txt             # Guidance on storing personal data
@@ -21,6 +25,13 @@ PSNetMap/
 └── tests/                              # Pester test suite
     └── NetDiagram.Tests.ps1            # Tests for the module functions
 ```
+
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs on every push/PR to `main`:
+- **Pester** test suite on `ubuntu-latest`, `macos-latest`, and `windows-latest`.
+- **PSScriptAnalyzer** (fails the build on any Error-severity finding).
+- Manifest validation via `Test-ModuleManifest`.
 
 ## Best Practices Implemented
 
@@ -73,5 +84,5 @@ For the easiest experience, run the wizard:
 
 ---
 
-**Last Updated:** 2025-11-02
-**Module Version:** 1.1.0
+**Last Updated:** 2026-07-30
+**Module Version:** 1.3.0

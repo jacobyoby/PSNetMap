@@ -1,6 +1,6 @@
 # NetDiagram-PS
 
-NetDiagram-PS is a cross-platform PowerShell 7+ module that discovers your network topology and generates draw.io diagrams with Cisco network icons, subnet containers, and consistent styling.
+NetDiagram-PS is a cross-platform PowerShell 7.4+ module that discovers your network topology and generates draw.io diagrams with Cisco network icons, subnet containers, and consistent styling.
 
 **✓ Windows | ✓ macOS | ✓ Linux**
 
@@ -113,6 +113,17 @@ $topo = Import-Inventory -Path '.\my-inventory.json'
 $topo = $topo | Get-SnmpNeighbors -CredentialMapPath '.\my-credmap.json'
 $topo | Export-DrawIO -OutFile '.\network.drawio'
 ```
+
+> **Note:** `Get-SnmpNeighbors` queries every imported node by default (nodes whose
+> reachability has not been tested are still queried), so the workflow above runs end to
+> end without a separate reachability pass. Add `-OnlyReachable` (after piping through
+> `Test-DeviceReachability`) to query only nodes that answered a ping.
+>
+> **LLDP/CDP parsing is best-effort (MVP):** it extracts management IPs from `snmpwalk`
+> output and links them to known nodes, but does not fully decode the LLDP MIB. Treat the
+> resulting SNMP edges as hints to verify, not authoritative topology. The community
+> string is redacted from verbose logging, but is briefly visible in the local process
+> list while `snmpwalk` runs — prefer SNMPv3 for anything sensitive.
 
 ---
 
@@ -320,7 +331,7 @@ Check the `examples/` directory:
 **Cause:** PowerShell version too old
 
 **Solutions:**
-- Check version: `$PSVersionTable.PSVersion` (must be 7.0+)
+- Check version: `$PSVersionTable.PSVersion` (must be 7.4+)
 - Upgrade: Download from https://aka.ms/powershell
 
 ### "SNMP returns nothing"

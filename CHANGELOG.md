@@ -5,6 +5,31 @@ All notable changes to NetDiagram-PS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-11-02
+
+### Fixed
+- **SNMP discovery on macOS/Linux** - `Invoke-SnmpWalk` hard-coded `snmpwalk.exe`, so
+  SNMP neighbor discovery never worked on the platforms added in 1.1.0. It now resolves
+  `snmpwalk` (Unix) or `snmpwalk.exe` (Windows) from PATH.
+- Pester suite no longer asserts a stale hard-coded module version; the version test now
+  reads the manifest, and the module path is built with `Join-Path` (no literal backslash),
+  so tests run on macOS/Linux as well as Windows.
+
+### Changed
+- **Minimum PowerShell raised to 7.4.** The reachability functions use
+  `Test-Connection -TimeoutSeconds`, which only exists in PowerShell 7.4+. The manifest
+  previously advertised 7.0, on which those calls error.
+- Added `CompatiblePSEditions = @('Core')` to the manifest.
+- LICENSE copyright holder and README license section aligned with the manifest (MIT,
+  Jacob Yoby).
+
+### Added
+- Additional Pester tests for `Get-MACVendor`, `Get-CommonSNMPStrings`,
+  `Resolve-IPHostname`, `Invoke-SnmpWalk` (missing-binary path), and the private
+  `Test-IPInSubnet` helper.
+- `PUBLISHING.md` documenting the PowerShell Gallery release process.
+- GitHub Actions workflow running the Pester suite on Windows, macOS, and Linux.
+
 ## [1.1.0] - 2025-10-31
 
 ### Added

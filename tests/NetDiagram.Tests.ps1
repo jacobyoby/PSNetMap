@@ -1,9 +1,12 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 
 BeforeAll {
-    # Import module
-    $modulePath = Join-Path $PSScriptRoot '..\NetDiagram-PS\NetDiagram-PS.psd1'
+    # Import module (Join-Path built cross-platform, no backslash literal)
+    $modulePath = Join-Path $PSScriptRoot '..' 'NetDiagram-PS' 'NetDiagram-PS.psd1'
     Import-Module $modulePath -Force
+
+    # Read the manifest so version assertions track the manifest instead of a hard-coded string
+    $script:Manifest = Import-PowerShellDataFile -Path $modulePath
 
     # Setup test data directory
     $script:TestDataPath = Join-Path $PSScriptRoot 'TestData'
@@ -38,7 +41,7 @@ Describe 'Module Import' {
     It 'Should import the module successfully' {
         $module = Get-Module -Name 'NetDiagram-PS'
         $module | Should -Not -BeNullOrEmpty
-        $module.Version | Should -Be '1.0.1'
+        $module.Version | Should -Be $script:Manifest.ModuleVersion
     }
 
     It 'Should export all required cmdlets' {
@@ -383,5 +386,78 @@ Describe 'Defensive Coding Tests' {
         'This is not valid JSON' | Out-File -FilePath $badJsonPath -Force
 
         { Import-Inventory -Path $badJsonPath } | Should -Throw
+    }
+}
+
+Describe 'Get-MACVendor' {
+    It 'Should resolve a known OUI to its vendor' {
+        $result = Get-MACVendor -MACAddress '00:1A:A0:12:34:56'
+        $result.Vendor | Should -Be 'Dell'
+        $result.OUI | Should -Be '00:1A:A0'
+    }
+
+    It 'Should normalize MAC formats to colon-delimited uppercase' {
+        (Get-MACVendor -MACAddress '001aa0123456').MACAddress | Should -Be '00:1A:A0:12:34:56'
+        (Get-MACVendor -MACAddress '00-1a-a0-12-34-56').MACAddress | Should -Be '00:1A:A0:12:34:56'
+    }
+
+    It 'Should report Unknown for an unmapped OUI' {
+        (Get-MACVendor -MACAddress 'FF:FF:FF:FF:FF:FF').Vendor | Should -Be 'Unknown'
+    }
+
+    It 'Should flag a too-short MAC as invalid' {
+        (Get-MACVendor -MACAddress '00:1A').Vendor | Should -Be 'Invalid MAC'
+    }
+
+    It 'Should accept pipeline input for multiple MACs' {
+        $results = @('00:1A:A0:00:00:00', '00:50:56:00:00:00') | Get-MACVendor
+        $results | Should -HaveCount 2
+        $results[1].Vendor | Should -Be 'VMware'
+    }
+}
+
+Describe 'Get-CommonSNMPStrings' {
+    It 'Should return the common default community strings' {
+        $strings = Get-CommonSNMPStrings
+        $strings | Should -Contain 'public'
+        $strings | Should -Contain 'private'
+        $strings.Count | Should -BeGreaterThan 5
+    }
+}
+
+Describe 'Resolve-IPHostname' {
+    It 'Should return a failure object for an unresolvable address' {
+        # 192.0.2.0/24 is TEST-NET-1 (RFC 5737) and never resolves
+        $result = Resolve-IPHostname -IPAddress '192.0.2.1'
+        $result.IPAddress | Should -Be '192.0.2.1'
+        $result.Success | Should -Be $false
+    }
+}
+
+Describe 'Invoke-SnmpWalk' {
+    It 'Should throw a helpful error when the snmpwalk binary is missing' {
+        Mock Get-Command { $null } -ModuleName 'NetDiagram-PS' -ParameterFilter { $Name -like 'snmpwalk*' }
+        { Invoke-SnmpWalk -TargetIP '192.0.2.1' -Community 'public' } |
+            Should -Throw -ExpectedMessage '*snmpwalk not found*'
+    }
+}
+
+Describe 'Test-IPInSubnet (private helper)' {
+    It 'Should match an IP inside its CIDR range' {
+        InModuleScope 'NetDiagram-PS' {
+            Test-IPInSubnet -IP '192.168.1.50' -CIDR '192.168.1.0/24' | Should -Be $true
+        }
+    }
+
+    It 'Should reject an IP outside the CIDR range' {
+        InModuleScope 'NetDiagram-PS' {
+            Test-IPInSubnet -IP '192.168.2.50' -CIDR '192.168.1.0/24' | Should -Be $false
+        }
+    }
+
+    It 'Should return false for a malformed CIDR' {
+        InModuleScope 'NetDiagram-PS' {
+            Test-IPInSubnet -IP '192.168.1.50' -CIDR 'not-a-cidr' | Should -Be $false
+        }
     }
 }

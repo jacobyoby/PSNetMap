@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+#Requires -Version 7.4
 
 <#
 .SYNOPSIS
@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Module-level variables
-$script:ModuleVersion = '1.1.0'
+$script:ModuleVersion = '1.2.0'
 
 #region Helper Functions
 
@@ -217,9 +217,10 @@ function Test-DeviceReachability {
 function Invoke-SnmpWalk {
     <#
     .SYNOPSIS
-        Invokes snmpwalk.exe against a target device
+        Invokes the net-snmp snmpwalk binary against a target device
     .DESCRIPTION
-        Calls snmpwalk.exe directly (must be in PATH) with specified OID and credentials.
+        Calls snmpwalk directly (must be in PATH) with specified OID and credentials.
+        Resolves 'snmpwalk' on macOS/Linux and 'snmpwalk.exe' on Windows.
         Returns raw output lines.
     .PARAMETER TargetIP
         IP address to query
@@ -252,10 +253,18 @@ function Invoke-SnmpWalk {
         [int]$TimeoutSeconds = 2
     )
 
-    # Check if snmpwalk.exe is available
-    $snmpWalkPath = Get-Command -Name 'snmpwalk.exe' -ErrorAction SilentlyContinue
-    if (-not $snmpWalkPath) {
-        throw "snmpwalk.exe not found in PATH. Please install net-snmp tools."
+    # Locate the snmpwalk binary. It is 'snmpwalk.exe' on Windows and 'snmpwalk'
+    # on macOS/Linux, so probe for both rather than assuming the Windows name.
+    $snmpWalkCmd = $null
+    foreach ($candidate in @('snmpwalk', 'snmpwalk.exe')) {
+        $found = Get-Command -Name $candidate -ErrorAction SilentlyContinue
+        if ($found) {
+            $snmpWalkCmd = $found.Source
+            break
+        }
+    }
+    if (-not $snmpWalkCmd) {
+        throw "snmpwalk not found in PATH. Please install net-snmp tools (brew install net-snmp, apt install snmp, or choco install net-snmp)."
     }
 
     try {
@@ -267,12 +276,12 @@ function Invoke-SnmpWalk {
             $OID
         )
 
-        Write-Verbose "Running: snmpwalk.exe $($arguments -join ' ')"
+        Write-Verbose "Running: $snmpWalkCmd $($arguments -join ' ')"
 
-        $output = & snmpwalk.exe @arguments 2>&1
+        $output = & $snmpWalkCmd @arguments 2>&1
 
         if ($LASTEXITCODE -ne 0) {
-            Write-Warning "snmpwalk.exe failed for $TargetIP with exit code $LASTEXITCODE"
+            Write-Warning "snmpwalk failed for $TargetIP with exit code $LASTEXITCODE"
             return @()
         }
 
@@ -520,11 +529,14 @@ function Test-IPInSubnet {
     $ipValue = [System.BitConverter]::ToUInt32($ipBytes, 0)
     $networkValue = [System.BitConverter]::ToUInt32($networkBytes, 0)
 
+    # Build the prefix mask. Compute in UInt64 to avoid the int overflow that
+    # '[uint32]0xFFFFFFFF -shl n' triggers (0xFFFFFFFF parses as int -1), then
+    # truncate back to 32 bits.
     $mask = if ($prefixLength -eq 0) {
         [uint32]0
     }
     else {
-        [uint32]0xFFFFFFFF -shl (32 - $prefixLength)
+        [uint32]((([uint64]4294967295) -shl (32 - $prefixLength)) -band [uint64]4294967295)
     }
 
     return (($ipValue -band $mask) -eq ($networkValue -band $mask))

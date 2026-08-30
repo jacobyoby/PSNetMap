@@ -348,6 +348,15 @@ Check the `examples/` directory:
 
 ## Running Tests
 
+On macOS or Linux, use the local runner so missing prerequisites are explicit:
+
+```bash
+./tests/run-tests.sh
+```
+
+Exit `0` means pass, `1` means tests failed, and `2` means `pwsh` or Pester is
+unavailable and the suite did not run.
+
 ```powershell
 # Install Pester if needed
 Install-Module -Name Pester -MinimumVersion 5.0.0 -Force

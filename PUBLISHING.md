@@ -34,8 +34,17 @@ Resolve anything at `Error` severity before publishing. Warnings are advisory.
 
 ## 3. Run the test suite
 
+On macOS or Linux:
+
+```bash
+./tests/run-tests.sh
+```
+
+Exit `2` is `CANNOT-RUN`, not a passing or failing suite. Install the named
+prerequisite or run CI before publishing.
+
 ```powershell
-Invoke-Pester -Path ./tests/NetDiagram.Tests.ps1 -Output Detailed
+./tests/run-tests.ps1
 ```
 
 All tests must pass on the target platform(s).

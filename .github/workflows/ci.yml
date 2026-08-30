@@ -18,6 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate POSIX runner contract
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./tests/test-runner-contract.sh
+
       - name: Validate module manifest
         shell: pwsh
         run: Test-ModuleManifest ./NetDiagram-PS/NetDiagram-PS.psd1
@@ -28,12 +33,7 @@ jobs:
 
       - name: Run Pester tests
         shell: pwsh
-        run: |
-          $config = New-PesterConfiguration
-          $config.Run.Path = './tests/NetDiagram.Tests.ps1'
-          $config.Output.Verbosity = 'Detailed'
-          $config.Run.Exit = $true
-          Invoke-Pester -Configuration $config
+        run: ./tests/run-tests.ps1
 
   lint:
     name: PSScriptAnalyzer

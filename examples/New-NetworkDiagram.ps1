@@ -16,6 +16,8 @@
 .PARAMETER InterfaceName
     Interface name or numeric interface index to scan. By default, the interface
     used by the active IPv4 default route is selected.
+.PARAMETER DnsTimeoutSeconds
+    Maximum time for each reverse DNS lookup during discovery (default: 2 seconds).
 .EXAMPLE
     .\New-NetworkDiagram.ps1
 
@@ -33,7 +35,10 @@ param(
 
     [string]$OutputPath = '.\my-network.drawio',
 
-    [string]$InterfaceName
+    [string]$InterfaceName,
+
+    [ValidateRange(1, 30)]
+    [int]$DnsTimeoutSeconds = 2
 )
 
 function Get-WizardInventoryPath {
@@ -521,8 +526,16 @@ $scanTargets | ForEach-Object -Parallel {
 
     if ($result) {
         $hostname = try {
-            $resolved = [System.Net.Dns]::GetHostEntry($testIP)
-            $resolved.HostName
+            if (-not (Get-Command Resolve-IPHostname -ErrorAction SilentlyContinue)) {
+                Import-Module $using:modulePath -Force
+            }
+            $resolved = Resolve-IPHostname -IPAddress $testIP -TimeoutSeconds $using:DnsTimeoutSeconds
+            if ($resolved.Success -and -not [string]::IsNullOrWhiteSpace($resolved.Hostname)) {
+                $resolved.Hostname
+            }
+            else {
+                "Device-$testIP"
+            }
         } catch {
             "Device-$testIP"
         }

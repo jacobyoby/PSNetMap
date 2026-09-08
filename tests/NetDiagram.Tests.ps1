@@ -432,6 +432,38 @@ Describe 'Resolve-IPHostname' {
         $result.IPAddress | Should -Be '192.0.2.1'
         $result.Success | Should -Be $false
     }
+
+    It 'Returns within the configured deadline for a stalled resolver task' {
+        InModuleScope 'NetDiagram-PS' {
+            $source = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+            $result = Wait-DnsLookupTask -LookupTask $source.Task `
+                -IPAddress '192.0.2.10' -TimeoutSeconds 1
+            $stopwatch.Stop()
+
+            $result.IPAddress | Should -Be '192.0.2.10'
+            $result.Hostname | Should -BeNullOrEmpty
+            $result.Success | Should -Be $false
+            $stopwatch.Elapsed.TotalSeconds | Should -BeLessThan 2.5
+        }
+    }
+
+    It 'Returns a failure immediately for a faulted resolver task' {
+        InModuleScope 'NetDiagram-PS' {
+            $source = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $source.SetException([InvalidOperationException]::new('fixture failure'))
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+            $result = Wait-DnsLookupTask -LookupTask $source.Task `
+                -IPAddress '192.0.2.11' -TimeoutSeconds 5
+            $stopwatch.Stop()
+
+            $result.IPAddress | Should -Be '192.0.2.11'
+            $result.Success | Should -Be $false
+            $stopwatch.Elapsed.TotalSeconds | Should -BeLessThan 1
+        }
+    }
 }
 
 Describe 'Invoke-SnmpWalk' {

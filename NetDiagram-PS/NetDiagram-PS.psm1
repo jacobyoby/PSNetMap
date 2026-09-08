@@ -1366,6 +1366,38 @@ function Get-LocalARPTable {
     }
 }
 
+function Wait-DnsLookupTask {
+    param(
+        [Parameter(Mandatory)][System.Threading.Tasks.Task]$LookupTask,
+        [Parameter(Mandatory)][string]$IPAddress,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+
+    try {
+        if ($LookupTask.Wait([TimeSpan]::FromSeconds($TimeoutSeconds))) {
+            $result = $LookupTask.Result
+            return [pscustomobject]@{
+                IPAddress = $IPAddress
+                Hostname  = $result.HostName
+                Aliases   = $result.Aliases
+                Success   = $true
+            }
+        }
+
+        Write-Verbose "DNS lookup for $IPAddress timed out after $TimeoutSeconds second(s)"
+    }
+    catch {
+        Write-Verbose "DNS lookup for $IPAddress failed: $($_.Exception.Message)"
+    }
+
+    return [pscustomobject]@{
+        IPAddress = $IPAddress
+        Hostname  = $null
+        Aliases   = @()
+        Success   = $false
+    }
+}
+
 function Resolve-IPHostname {
     <#
     .SYNOPSIS
@@ -1406,25 +1438,7 @@ function Resolve-IPHostname {
                 # pipeline. On timeout we return a failure object (the background task
                 # is abandoned).
                 $task = [System.Net.Dns]::GetHostEntryAsync($ip)
-
-                if ($task.Wait([TimeSpan]::FromSeconds($TimeoutSeconds))) {
-                    $result = $task.Result
-                    [pscustomobject]@{
-                        IPAddress = $ip
-                        Hostname  = $result.HostName
-                        Aliases   = $result.Aliases
-                        Success   = $true
-                    }
-                }
-                else {
-                    Write-Verbose "DNS lookup for $ip timed out after $TimeoutSeconds second(s)"
-                    [pscustomobject]@{
-                        IPAddress = $ip
-                        Hostname  = $null
-                        Aliases   = @()
-                        Success   = $false
-                    }
-                }
+                Wait-DnsLookupTask -LookupTask $task -IPAddress $ip -TimeoutSeconds $TimeoutSeconds
             }
             catch {
                 [pscustomobject]@{

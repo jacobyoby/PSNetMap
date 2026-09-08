@@ -17,6 +17,8 @@
   "_instructions": {
     "setup": "1. Install: Install-Module Microsoft.PowerShell.SecretManagement",
     "store_secret": "2. Store secrets: Set-Secret -Name 'YourSNMPSecretName' -Secret 'your-community-string'",
-    "usage": "3. Use: Get-SnmpNeighbors -CredentialMapPath .\\examples\\credmap.json"
+    "usage": "3. Use: Get-SnmpNeighbors -CredentialMapPath .\\examples\\credmap.json",
+    "matching": "The most specific matching IPv4 CIDR wins. Default is used only when no CIDR matches.",
+    "missing_secret": "A missing or unavailable selected secret skips that node unless -TryPublic is explicitly supplied."
   }
 }

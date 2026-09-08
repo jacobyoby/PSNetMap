@@ -161,6 +161,13 @@ Create a JSON file with your network devices:
 
 Supported roles: `router`, `core-router`, `distribution`, `switch`, `server`, `workstation`
 
+The stable inventory contract is IPv4-only. `knownDevices` is required and must be a
+JSON array; `subnets`, when present, must also be an array. Each device requires a unique
+IPv4 `ip`, and each subnet requires an IPv4 `cidr` with a prefix from 0 through 32.
+Addresses are normalized, and host bits in CIDRs are cleared (for example,
+`192.168.1.42/24` becomes `192.168.1.0/24`). IPv6 is rejected explicitly. Unknown or
+omitted roles remain valid and are placed in the Access layer.
+
 See `examples/inventory-template.json` for a complete template.
 
 ---
@@ -419,4 +426,3 @@ Import-Inventory my-network-inventory.json | Export-DrawIO -OutFile my-network.d
 2. Check command help: `Get-Help <CommandName> -Examples`
 3. Review example files in `examples/`
 4. Report issues with detailed error messages
-

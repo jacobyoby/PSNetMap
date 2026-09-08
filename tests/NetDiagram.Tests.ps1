@@ -636,6 +636,22 @@ Describe 'Quick-start wizard CIDR math (#4 regression)' {
         $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full')
         $targets.Count | Should -Be 0
     }
+
+    It 'Builds a sibling inventory path for a .xml output path' {
+        $outputPath = Join-Path $script:TestDataPath 'office.xml'
+        $inventoryPath = Get-WizardInventoryPath -OutputPath $outputPath
+
+        $inventoryPath | Should -Be (Join-Path $script:TestDataPath 'office-inventory.json')
+        $inventoryPath | Should -Not -Be $outputPath
+    }
+
+    It 'Builds a sibling inventory path for an extensionless output path' {
+        $outputPath = Join-Path $script:TestDataPath 'office'
+        $inventoryPath = Get-WizardInventoryPath -OutputPath $outputPath
+
+        $inventoryPath | Should -Be (Join-Path $script:TestDataPath 'office-inventory.json')
+        $inventoryPath | Should -Not -Be $outputPath
+    }
 }
 
 Describe 'Quick-start wizard output paths (#9 regression)' {

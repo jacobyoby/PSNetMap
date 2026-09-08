@@ -31,6 +31,11 @@ param(
     [string]$OutputPath = '.\my-network.drawio'
 )
 
+function Get-WizardInventoryPath {
+    param([Parameter(Mandatory)][string]$OutputPath)
+    return Get-InventoryOutputPath -DiagramPath $OutputPath
+}
+
 # ── IPv4 CIDR helpers ────────────────────────────────────────────────────────
 # Real prefix-aware host enumeration (replaces the old /24-only "first 3 octets"
 # assumption). Works for any prefix; the caller caps how many hosts get scanned.

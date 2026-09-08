@@ -201,17 +201,51 @@ Generated diagrams include:
 
 ```text
 PSNetMap/
-├── CHANGELOG.md            # Release history
-├── LICENSE                 # MIT license
-├── README.md               # Main documentation (this file)
-├── STRUCTURE.md            # Additional notes on the folder layout
-├── WHERE-TO-SAVE-FILES.txt # Tips for keeping inventories outside the repo
-├── NetDiagram-PS/          # PowerShell module manifest & implementation
-├── examples/               # Wizard script plus sample JSON templates
-└── tests/                  # Pester test suite
+├── .github/workflows/ci.yml        # Three-OS Pester and analyzer checks
+├── .gitignore                      # Generated files, packages, and editor state
+├── AGENTS.md                       # Local contributor instructions
+├── CHANGELOG.md                    # Release history
+├── LICENSE                         # MIT license
+├── PUBLISHING.md                   # Gallery packaging and release procedure
+├── README.md                       # Main documentation and conventions
+├── NetDiagram-PS/
+│   ├── NetDiagram-PS.psd1          # Module manifest
+│   └── NetDiagram-PS.psm1          # Module implementation
+├── examples/
+│   ├── New-NetworkDiagram.ps1      # Guided discovery wizard
+│   ├── credmap.json                # SNMP credential-map template
+│   └── inventory-template.json     # Inventory template
+└── tests/
+    └── NetDiagram.Tests.ps1        # Pester test suite
 ```
 
-The module ships without a separate `docs/` directory. All user-facing documentation currently lives in the files listed above.
+This is the single maintained repository-layout reference. Update it when tracked
+top-level files or test entry points change.
+
+### Keep generated network data outside the clone
+
+Diagrams, inventories, and credential maps can describe private infrastructure. Use a
+separate working directory so generated data is not accidentally committed.
+
+Windows PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Path C:\MyNetworkDocs -Force
+Set-Location C:\MyNetworkDocs
+Import-Module C:\Path\To\PSNetMap\NetDiagram-PS\NetDiagram-PS.psd1
+```
+
+macOS or Linux:
+
+```powershell
+New-Item -ItemType Directory -Path "$HOME/network-docs" -Force
+Set-Location "$HOME/network-docs"
+Import-Module /path/to/PSNetMap/NetDiagram-PS/NetDiagram-PS.psd1
+```
+
+Save files such as `my-inventory.json`, `my-network.drawio`, and local credential maps
+in that working directory. Do not put secret values in a credential map; store them with
+PowerShell SecretManagement as shown in the SNMP example above.
 
 ---
 
@@ -419,4 +453,3 @@ Import-Inventory my-network-inventory.json | Export-DrawIO -OutFile my-network.d
 2. Check command help: `Get-Help <CommandName> -Examples`
 3. Review example files in `examples/`
 4. Report issues with detailed error messages
-

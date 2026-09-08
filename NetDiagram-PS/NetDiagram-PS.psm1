@@ -872,13 +872,21 @@ function Export-DrawIO {
                     default         { @{ shape='rectangle'; fillColor='#e1e1e1'; strokeColor='#999999' } }
                 }
 
-                # Override fill color for reachability status
+                # Status is tri-state and controls the status color consistently.
                 if ($node.Reachable -eq $true) {
+                    $status = 'Reachable'
                     $shapeConfig.fillColor = '#d5e8d4'
                     $shapeConfig.strokeColor = '#82b366'
-                } elseif ($node.Reachable -eq $false) {
+                }
+                elseif ($node.Reachable -eq $false) {
+                    $status = 'Unreachable'
                     $shapeConfig.fillColor = '#f8cecc'
                     $shapeConfig.strokeColor = '#b85450'
+                }
+                else {
+                    $status = 'Unknown'
+                    $shapeConfig.fillColor = '#f5f5f5'
+                    $shapeConfig.strokeColor = '#666666'
                 }
 
                 # Node label with better formatting (escape entire label for XML)
@@ -886,7 +894,7 @@ function Export-DrawIO {
                 if ($node.IP -ne $node.Hostname) {
                     $labelText += "`n$($node.IP)"
                 }
-                $label = [System.Security.SecurityElement]::Escape($labelText)
+                $label = ([System.Security.SecurityElement]::Escape($labelText)) -replace "`n", '&#xa;'
 
                 # Build enhanced style with shadow and rounded corners
                 $nodeStyle = "shape=$($shapeConfig.shape);rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=top;"
@@ -901,16 +909,21 @@ function Export-DrawIO {
                     "Vendor: $($node.Vendor)",
                     "OS: $($node.OS)",
                     "Layer: $($node.Layer)",
-                    "Status: $(if ($node.Reachable) { 'Reachable' } else { 'Unreachable' })"
+                    "Status: $status"
                 )
-                $tooltip = [System.Security.SecurityElement]::Escape(($tooltipParts -join "`n"))
+                $tooltip = ([System.Security.SecurityElement]::Escape(($tooltipParts -join "`n"))) -replace "`n", '&#xa;'
+                $ipAttribute = [System.Security.SecurityElement]::Escape([string]$node.IP)
+                $hostnameAttribute = [System.Security.SecurityElement]::Escape([string]$node.Hostname)
+                $roleAttribute = [System.Security.SecurityElement]::Escape([string]$node.Role)
+                $vendorAttribute = [System.Security.SecurityElement]::Escape([string]$node.Vendor)
+                $osAttribute = [System.Security.SecurityElement]::Escape([string]$node.OS)
+                $layerAttribute = [System.Security.SecurityElement]::Escape([string]$node.Layer)
 
-                $null = $xml.AppendLine("        <mxCell id=`"$nodeID`" value=`"$label`" style=`"$nodeStyle`" parent=`"$parentID`" vertex=`"1`">")
-                $null = $xml.AppendLine("          <mxGeometry x=`"$xPos`" y=`"$yPos`" width=`"140`" height=`"80`" as=`"geometry`"/>")
-                $null = $xml.AppendLine('        </mxCell>')
-
-                # Add custom metadata as UserObject (best practice)
-                # Note: In production, this would replace the mxCell with UserObject, but keeping it simple for MVP
+                $null = $xml.AppendLine("        <UserObject id=`"$nodeID`" label=`"$label`" tooltip=`"$tooltip`" ip=`"$ipAttribute`" hostname=`"$hostnameAttribute`" role=`"$roleAttribute`" vendor=`"$vendorAttribute`" os=`"$osAttribute`" layer=`"$layerAttribute`" status=`"$status`">")
+                $null = $xml.AppendLine("          <mxCell style=`"$nodeStyle`" parent=`"$parentID`" vertex=`"1`">")
+                $null = $xml.AppendLine("            <mxGeometry x=`"$xPos`" y=`"$yPos`" width=`"140`" height=`"80`" as=`"geometry`"/>")
+                $null = $xml.AppendLine('          </mxCell>')
+                $null = $xml.AppendLine('        </UserObject>')
             }
         }
 

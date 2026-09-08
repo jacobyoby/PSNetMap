@@ -145,6 +145,18 @@ Describe 'Merge-Edges' {
         $merged[0].Confidence | Should -Be 'L2-SNMP'
     }
 
+    It 'Does not promote a provisional SNMP hint to verified confidence' {
+        $edges = @(
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = 'Inferred'; Source = 'Manual'; Confidence = 'L3-Inferred' }
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = 'Hint'; Source = 'SNMP'; Confidence = 'L2-SNMP-Heuristic' }
+        )
+
+        $merged = Merge-Edges -Edges $edges
+        $merged | Should -HaveCount 1
+        $merged[0].Confidence | Should -Be 'L2-SNMP-Heuristic'
+        $merged[0].Confidence | Should -Not -Be 'L2-SNMP'
+    }
+
     It 'Should keep first non-empty label' {
         $edges = @(
             [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = 'FirstLabel'; Source = 'Manual' }
@@ -499,6 +511,81 @@ Describe 'Get-SnmpNeighbors node eligibility (#1 regression)' {
 
         # Only the single reachable/unmarked node should be queried
         Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 1 -Exactly
+    }
+}
+
+Describe 'Get-SnmpNeighbors provisional parser confidence (#20 regression)' {
+    BeforeEach {
+        $script:CredMapPath = Join-Path $script:TestDataPath 'credmap-parser.json'
+        '{}' | Out-File -FilePath $script:CredMapPath -Force
+        $script:ParserTopology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP = '192.168.1.1'; Reachable = $true }
+                [pscustomobject]@{ IP = '192.168.1.2'; Reachable = $true }
+            )
+            Edges = @()
+            Subnets = @()
+        }
+    }
+
+    It 'Accepts typed management addresses and rejects unrelated or unsafe values' {
+        Mock Invoke-SnmpWalk {
+            if ($TargetIP -eq '192.168.1.1') {
+                @(
+                    'oid.1 = STRING: "peer text mentions 192.168.1.2"'
+                    'oid.2 = IpAddress: 192.168.1.1'
+                    'oid.3 = IpAddress: 192.168.1.999'
+                    'oid.4 = IpAddress: 203.0.113.9'
+                    'oid.5 = IpAddress: 192.168.1.2'
+                )
+            }
+            else { @() }
+        } -ModuleName 'NetDiagram-PS'
+
+        $result = $script:ParserTopology | Get-SnmpNeighbors `
+            -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+
+        $result.Edges | Should -HaveCount 1
+        $result.Edges[0].TargetIP | Should -Be '192.168.1.2'
+        $result.Edges[0].Confidence | Should -Be 'L2-SNMP-Heuristic'
+    }
+
+    It 'Accepts a typed four-octet Hex-STRING as a provisional hint' {
+        Mock Invoke-SnmpWalk {
+            if ($TargetIP -eq '192.168.1.1') { @('oid.1 = Hex-STRING: C0 A8 01 02') }
+            else { @() }
+        } -ModuleName 'NetDiagram-PS'
+
+        $result = $script:ParserTopology | Get-SnmpNeighbors `
+            -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+
+        $result.Edges | Should -HaveCount 1
+        $result.Edges[0].TargetIP | Should -Be '192.168.1.2'
+        $result.Edges[0].Confidence | Should -Be 'L2-SNMP-Heuristic'
+    }
+
+    It 'Exports provisional hints with a distinct amber dashed style' {
+        $script:ParserTopology.Edges = @(
+            [pscustomobject]@{
+                SourceIP = '192.168.1.1'; TargetIP = '192.168.1.2'; Label = 'LLDP hint'
+                Source = 'SNMP'; Confidence = 'L2-SNMP-Heuristic'
+            }
+        )
+        foreach ($node in $script:ParserTopology.Nodes) {
+            $node | Add-Member -NotePropertyName Hostname -NotePropertyValue $node.IP
+            $node | Add-Member -NotePropertyName Role -NotePropertyValue 'switch'
+            $node | Add-Member -NotePropertyName Vendor -NotePropertyValue 'Test'
+            $node | Add-Member -NotePropertyName OS -NotePropertyValue 'Test'
+            $node | Add-Member -NotePropertyName Layer -NotePropertyValue 'Access'
+        }
+        $drawioPath = Join-Path $script:TestDataPath 'provisional-snmp.drawio'
+
+        $script:ParserTopology | Export-DrawIO -OutFile $drawioPath
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $edge = $xml.SelectSingleNode('//mxCell[@edge="1"]')
+
+        $edge.style | Should -Match 'strokeColor=#B26A00'
+        $edge.style | Should -Match 'dashed=1'
     }
 }
 

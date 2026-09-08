@@ -119,9 +119,10 @@ $topo | Export-DrawIO -OutFile '.\network.drawio'
 > end without a separate reachability pass. Add `-OnlyReachable` (after piping through
 > `Test-DeviceReachability`) to query only nodes that answered a ping.
 >
-> **LLDP/CDP parsing is best-effort (MVP):** it extracts management IPs from `snmpwalk`
-> output and links them to known nodes, but does not fully decode the LLDP MIB. Treat the
-> resulting SNMP edges as hints to verify, not authoritative topology. The community
+> **LLDP/CDP parsing is best-effort (MVP):** it extracts typed management-address values
+> from `snmpwalk` output and links them to known nodes, but does not fully decode the
+> LLDP/CDP tables. These links are labeled `L2-SNMP-Heuristic` and drawn as amber dashed
+> hints. Only structured, correlated neighbor data may use verified `L2-SNMP`. The community
 > string is redacted from verbose logging, but is briefly visible in the local process
 > list while `snmpwalk` runs — prefer SNMPv3 for anything sensitive.
 
@@ -173,7 +174,7 @@ Generated diagrams include:
 - Subnet containers for visual grouping by network segment
 - Color-coded status indicators: green (reachable), red (unreachable), and gray (unknown)
 - Orthogonal connectors with rounded corners
-- Confidence levels: solid lines (layer 2 SNMP verified) and dashed lines (layer 3 inferred)
+- Confidence levels: solid green (verified layer 2 SNMP), dashed amber (provisional SNMP hint), and dashed gray (layer 3 inferred)
 - Labels that include device names, IP addresses, and connection details
 - Hierarchical layouts that align devices by network layer
 
@@ -419,4 +420,3 @@ Import-Inventory my-network-inventory.json | Export-DrawIO -OutFile my-network.d
 2. Check command help: `Get-Help <CommandName> -Examples`
 3. Review example files in `examples/`
 4. Report issues with detailed error messages
-

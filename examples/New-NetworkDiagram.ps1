@@ -13,6 +13,9 @@
     larger subnets). Host addresses are derived from the interface's real CIDR prefix.
 .PARAMETER OutputPath
     Where to save the diagram (default: .\my-network.drawio)
+.PARAMETER InterfaceName
+    Interface name or numeric interface index to scan. By default, the interface
+    used by the active IPv4 default route is selected.
 .EXAMPLE
     .\New-NetworkDiagram.ps1
 
@@ -28,7 +31,9 @@ param(
     [ValidateSet('Quick', 'Medium', 'Full')]
     [string]$ScanDepth = 'Quick',
 
-    [string]$OutputPath = '.\my-network.drawio'
+    [string]$OutputPath = '.\my-network.drawio',
+
+    [string]$InterfaceName
 )
 
 function Get-WizardInventoryPath {
@@ -134,6 +139,94 @@ function Get-InventoryOutputPath {
     return $inventoryPath
 }
 
+function Select-ScanInterface {
+    param(
+        [Parameter(Mandatory)][object[]]$Interfaces,
+        [string]$RequestedInterface,
+        [string]$DefaultInterfaceName,
+        [Nullable[int]]$DefaultInterfaceIndex
+    )
+
+    if ($Interfaces.Count -eq 0) {
+        throw 'No active IPv4 network interfaces were found.'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedInterface)) {
+        $matchingInterfaces = @($Interfaces | Where-Object {
+            $_.Name -eq $RequestedInterface -or
+            ($null -ne $_.Index -and "$($_.Index)" -eq $RequestedInterface)
+        })
+        if ($matchingInterfaces.Count -eq 0) {
+            throw "Network interface '$RequestedInterface' was not found. Available interfaces: $($Interfaces.Name -join ', ')"
+        }
+        if ($matchingInterfaces.Count -gt 1) {
+            throw "Network interface '$RequestedInterface' is ambiguous. Use its numeric interface index."
+        }
+        return $matchingInterfaces[0]
+    }
+
+    $routeMatches = @($Interfaces | Where-Object {
+        (-not [string]::IsNullOrWhiteSpace($DefaultInterfaceName) -and $_.Name -eq $DefaultInterfaceName) -or
+        ($null -ne $DefaultInterfaceIndex -and $_.Index -eq $DefaultInterfaceIndex)
+    })
+    if ($routeMatches.Count -eq 1) {
+        return $routeMatches[0]
+    }
+    if ($routeMatches.Count -gt 1) {
+        throw 'The default route maps to multiple IPv4 addresses. Select one with -InterfaceName.'
+    }
+    if ($Interfaces.Count -eq 1) {
+        return $Interfaces[0]
+    }
+
+    throw 'No IPv4 default-route interface could be selected. Use -InterfaceName with an available interface name or index.'
+}
+
+function ConvertFrom-MacOSInterfaceText {
+    param([Parameter(Mandatory)][string[]]$Lines)
+
+    $name = $null
+    foreach ($line in $Lines) {
+        if ($line -match '^([^\s:]+):\s') {
+            $name = $matches[1]
+            continue
+        }
+        if ($name -and $line -match '^\s+inet\s+(\d+\.\d+\.\d+\.\d+)(?:\s+-->\s+\d+\.\d+\.\d+\.\d+)?\s+netmask\s+0x([0-9a-fA-F]+)') {
+            if ($matches[1] -eq '127.0.0.1') { continue }
+            $binaryMask = [Convert]::ToString([Convert]::ToInt64($matches[2], 16), 2)
+            [pscustomobject]@{
+                Name = $name
+                Index = $null
+                IPAddress = $matches[1]
+                PrefixLength = ($binaryMask.ToCharArray() | Where-Object { $_ -eq '1' }).Count
+            }
+        }
+    }
+}
+
+function ConvertFrom-LinuxInterfaceText {
+    param([Parameter(Mandatory)][string[]]$Lines)
+
+    $name = $null
+    $index = $null
+    foreach ($line in $Lines) {
+        if ($line -match '^(\d+):\s+([^:@]+)(?:@[^:]+)?:') {
+            $index = [int]$matches[1]
+            $name = $matches[2]
+            continue
+        }
+        if ($name -and $line -match '^\s+inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)') {
+            if ($matches[1] -eq '127.0.0.1') { continue }
+            [pscustomobject]@{
+                Name = $name
+                Index = $index
+                IPAddress = $matches[1]
+                PrefixLength = [int]$matches[2]
+            }
+        }
+    }
+}
+
 # Allow the Pester suite to dot-source this script for the pure helper functions above
 # without launching the interactive wizard (which performs a live network scan).
 if ($MyInvocation.InvocationName -eq '.') { return }
@@ -158,26 +251,29 @@ Write-Host "[1/5] Discovering your network configuration..." -ForegroundColor Ye
 # Cross-platform network discovery
 if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindows) {
     # Windows: Use native cmdlets
-    $interfaces = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
+    $interfaces = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
         $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown'
-    }
-    
-    if ($interfaces.Count -eq 0) {
-        Write-Host "✗ No active network interfaces found!" -ForegroundColor Red
-        exit 1
-    }
-    
-    $primaryInterface = $interfaces | Select-Object -First 1
-    $myIP = $primaryInterface.IPAddress
-    $prefix = $primaryInterface.PrefixLength
+    } | ForEach-Object {
+        [pscustomobject]@{
+            Name = $_.InterfaceAlias
+            Index = $_.InterfaceIndex
+            IPAddress = $_.IPAddress
+            PrefixLength = $_.PrefixLength
+        }
+    })
     
     # Get gateway
     $routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
         Where-Object { $_.NextHop -ne '0.0.0.0' }
-    $gateway = $routes | Select-Object -First 1 -ExpandProperty NextHop
+    $defaultRoute = $routes | Sort-Object RouteMetric | Select-Object -First 1
+    $primaryInterface = Select-ScanInterface -Interfaces $interfaces -RequestedInterface $InterfaceName `
+        -DefaultInterfaceIndex $defaultRoute.InterfaceIndex
+    $selectedRoute = $routes | Where-Object { $_.InterfaceIndex -eq $primaryInterface.Index } |
+        Sort-Object RouteMetric | Select-Object -First 1
+    $gateway = $selectedRoute.NextHop
     
     # Get DNS
-    $dnsServers = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    $dnsServers = @(Get-DnsClientServerAddress -AddressFamily IPv4 -InterfaceIndex $primaryInterface.Index -ErrorAction SilentlyContinue |
         Where-Object { $_.ServerAddresses.Count -gt 0 } |
         Select-Object -ExpandProperty ServerAddresses -Unique |
         Where-Object { $_ -notmatch '^(127\.|::1|fe80:)' } |
@@ -187,33 +283,21 @@ if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindow
     if ($IsMacOS) {
         # Use ifconfig on macOS
         $ifconfigOutput = & ifconfig -a 2>&1
-        $ifconfigText = $ifconfigOutput -join "`n"
-        
-        # Parse for active IPv4 addresses
-        $ipMatches = [regex]::Matches($ifconfigText, 'inet\s+(\d+\.\d+\.\d+\.\d+)\s+netmask\s+0x([0-9a-f]+)')
-        $interfaces = @()
-        
-        foreach ($match in $ipMatches) {
-            $ip = $match.Groups[1].Value
-            if ($ip -ne '127.0.0.1') {
-                # Convert hex netmask to prefix length
-                $hexMask = $match.Groups[2].Value
-                $binaryMask = [Convert]::ToString([Convert]::ToInt64($hexMask, 16), 2)
-                $prefix = ($binaryMask.ToCharArray() | Where-Object { $_ -eq '1' }).Count
-                
-                $interfaces += [PSCustomObject]@{
-                    IPAddress = $ip
-                    PrefixLength = $prefix
-                }
-            }
-        }
+        $interfaces = @(ConvertFrom-MacOSInterfaceText -Lines $ifconfigOutput)
         
         # Get default gateway using route command
         $routeOutput = & route -n get default 2>&1
         $gatewayMatch = [regex]::Match(($routeOutput -join "`n"), 'gateway:\s+(\d+\.\d+\.\d+\.\d+)')
+        $routeInterfaceMatch = [regex]::Match(($routeOutput -join "`n"), 'interface:\s+(\S+)')
         if ($gatewayMatch.Success) {
             $gateway = $gatewayMatch.Groups[1].Value
         } else {
+            $gateway = $null
+        }
+        $defaultInterfaceName = if ($routeInterfaceMatch.Success) { $routeInterfaceMatch.Groups[1].Value } else { $null }
+        $primaryInterface = Select-ScanInterface -Interfaces $interfaces -RequestedInterface $InterfaceName `
+            -DefaultInterfaceName $defaultInterfaceName
+        if ($InterfaceName -and $primaryInterface.Name -ne $defaultInterfaceName) {
             $gateway = $null
         }
         
@@ -234,28 +318,21 @@ if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindow
     } elseif ($IsLinux) {
         # Use ip command on Linux
         $ipOutput = & ip -4 addr show 2>&1
-        $ipText = $ipOutput -join "`n"
-        
-        # Parse for active IPv4 addresses
-        $ipMatches = [regex]::Matches($ipText, 'inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)')
-        $interfaces = @()
-        
-        foreach ($match in $ipMatches) {
-            $ip = $match.Groups[1].Value
-            if ($ip -ne '127.0.0.1') {
-                $interfaces += [PSCustomObject]@{
-                    IPAddress = $ip
-                    PrefixLength = [int]$match.Groups[2].Value
-                }
-            }
-        }
+        $interfaces = @(ConvertFrom-LinuxInterfaceText -Lines $ipOutput)
         
         # Get default gateway
         $routeOutput = & ip route show default 2>&1
         $gatewayMatch = [regex]::Match(($routeOutput -join "`n"), 'default\s+via\s+(\d+\.\d+\.\d+\.\d+)')
+        $routeInterfaceMatch = [regex]::Match(($routeOutput -join "`n"), '\bdev\s+(\S+)')
         if ($gatewayMatch.Success) {
             $gateway = $gatewayMatch.Groups[1].Value
         } else {
+            $gateway = $null
+        }
+        $defaultInterfaceName = if ($routeInterfaceMatch.Success) { $routeInterfaceMatch.Groups[1].Value } else { $null }
+        $primaryInterface = Select-ScanInterface -Interfaces $interfaces -RequestedInterface $InterfaceName `
+            -DefaultInterfaceName $defaultInterfaceName
+        if ($InterfaceName -and $primaryInterface.Name -ne $defaultInterfaceName) {
             $gateway = $null
         }
         
@@ -268,18 +345,14 @@ if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindow
         }
     }
     
-    if ($interfaces.Count -eq 0) {
-        Write-Host "✗ No active network interfaces found!" -ForegroundColor Red
-        exit 1
-    }
-    
-    $primaryInterface = $interfaces | Select-Object -First 1
-    $myIP = $primaryInterface.IPAddress
-    $prefix = $primaryInterface.PrefixLength
 }
+
+$myIP = $primaryInterface.IPAddress
+$prefix = $primaryInterface.PrefixLength
 
 Write-Host "      Found $($interfaces.Count) active network interface(s)" -ForegroundColor Green
 
+Write-Host "      Interface: $($primaryInterface.Name)" -ForegroundColor Cyan
 Write-Host "      Your IP: $myIP/$prefix" -ForegroundColor Cyan
 Write-Host "      Gateway: $gateway" -ForegroundColor Cyan
 Write-Host "      DNS: $($dnsServers -join ', ')" -ForegroundColor Cyan

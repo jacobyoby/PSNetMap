@@ -683,3 +683,67 @@ Describe 'Quick-start wizard output paths (#9 regression)' {
             Should -Not -Be ([System.IO.Path]::GetFullPath($diagramPath))
     }
 }
+
+Describe 'Quick-start wizard interface selection (#15 regression)' {
+    BeforeAll {
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
+    }
+
+    It 'Selects the Windows address attached to the default route index' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'VPN'; Index = 7; IPAddress = '10.8.0.2'; PrefixLength = 24 }
+            [pscustomobject]@{ Name = 'Ethernet'; Index = 12; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+        )
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -DefaultInterfaceIndex 12
+        $selected.Name | Should -Be 'Ethernet'
+        $selected.IPAddress | Should -Be '192.168.1.20'
+    }
+
+    It 'Retains macOS interface names and selects the default-route interface' {
+        $interfaces = @(ConvertFrom-MacOSInterfaceText -Lines @(
+            'utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380'
+            '    inet 10.8.0.2 --> 10.8.0.2 netmask 0xffffffff'
+            'en0: flags=8863<UP,BROADCAST,SMART,RUNNING> mtu 1500'
+            '    inet 192.168.50.12 netmask 0xffffff00 broadcast 192.168.50.255'
+        ))
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -DefaultInterfaceName 'en0'
+        $selected.Name | Should -Be 'en0'
+        $selected.PrefixLength | Should -Be 24
+    }
+
+    It 'Retains Linux interface names and honors an explicit selector' {
+        $interfaces = @(ConvertFrom-LinuxInterfaceText -Lines @(
+            '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500'
+            '    inet 192.168.1.20/24 brd 192.168.1.255 scope global eth0'
+            '5: wg0: <POINTOPOINT,UP,LOWER_UP> mtu 1420'
+            '    inet 10.8.0.2/24 scope global wg0'
+        ))
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'wg0' `
+            -DefaultInterfaceName 'eth0'
+        $selected.Name | Should -Be 'wg0'
+        $selected.IPAddress | Should -Be '10.8.0.2'
+    }
+
+    It 'Fails clearly when multiple interfaces exist without a default route' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'eth0'; Index = 2; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+            [pscustomobject]@{ Name = 'wg0'; Index = 5; IPAddress = '10.8.0.2'; PrefixLength = 24 }
+        )
+
+        { Select-ScanInterface -Interfaces $interfaces } |
+            Should -Throw '*Use -InterfaceName*'
+    }
+
+    It 'Fails clearly for an unavailable explicit selector' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'eth0'; Index = 2; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+        )
+
+        { Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'missing0' } |
+            Should -Throw '*was not found*'
+    }
+}

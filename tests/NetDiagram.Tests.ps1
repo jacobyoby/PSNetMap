@@ -653,3 +653,33 @@ Describe 'Quick-start wizard CIDR math (#4 regression)' {
         $inventoryPath | Should -Not -Be $outputPath
     }
 }
+
+Describe 'Quick-start wizard output paths (#9 regression)' {
+    BeforeAll {
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
+    }
+
+    It 'Derives a sibling inventory path for a drawio diagram' {
+        Get-InventoryOutputPath -DiagramPath './office.drawio' |
+            Should -Be (Join-Path '.' 'office-inventory.json')
+    }
+
+    It 'Keeps an XML diagram and its inventory distinct' {
+        $diagramPath = Join-Path $TestDrive 'office.xml'
+        $inventoryPath = Get-InventoryOutputPath -DiagramPath $diagramPath
+
+        $inventoryPath | Should -Be (Join-Path $TestDrive 'office-inventory.json')
+        [System.IO.Path]::GetFullPath($inventoryPath) |
+            Should -Not -Be ([System.IO.Path]::GetFullPath($diagramPath))
+    }
+
+    It 'Keeps an extensionless diagram and its inventory distinct' {
+        $diagramPath = Join-Path $TestDrive 'office'
+        $inventoryPath = Get-InventoryOutputPath -DiagramPath $diagramPath
+
+        $inventoryPath | Should -Be (Join-Path $TestDrive 'office-inventory.json')
+        [System.IO.Path]::GetFullPath($inventoryPath) |
+            Should -Not -Be ([System.IO.Path]::GetFullPath($diagramPath))
+    }
+}

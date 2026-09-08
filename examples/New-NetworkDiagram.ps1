@@ -33,23 +33,8 @@ param(
 
 function Get-WizardInventoryPath {
     param([Parameter(Mandatory)][string]$OutputPath)
-
-    $outputDirectory = [System.IO.Path]::GetDirectoryName($OutputPath)
-    $outputBaseName = [System.IO.Path]::GetFileNameWithoutExtension($OutputPath)
-
-    if ([string]::IsNullOrEmpty($outputBaseName)) {
-        $outputBaseName = [System.IO.Path]::GetFileName($OutputPath)
-    }
-
-    $inventoryFileName = "$outputBaseName-inventory.json"
-    if ([string]::IsNullOrEmpty($outputDirectory)) {
-        return $inventoryFileName
-    }
-
-    return (Join-Path $outputDirectory $inventoryFileName)
+    return Get-InventoryOutputPath -DiagramPath $OutputPath
 }
-
-$inventoryPath = Get-WizardInventoryPath -OutputPath $OutputPath
 
 # ── IPv4 CIDR helpers ────────────────────────────────────────────────────────
 # Real prefix-aware host enumeration (replaces the old /24-only "first 3 octets"
@@ -121,7 +106,35 @@ function Get-SubnetScanTarget {
     return $hostValues.ToArray()
 }
 
-# Allow the Pester suite to dot-source this script for the CIDR helper functions above
+function Get-InventoryOutputPath {
+    param([Parameter(Mandatory)][string]$DiagramPath)
+
+    if ([string]::IsNullOrWhiteSpace($DiagramPath)) {
+        throw 'Diagram output path cannot be empty.'
+    }
+
+    $fileName = [System.IO.Path]::GetFileNameWithoutExtension($DiagramPath)
+    if ([string]::IsNullOrWhiteSpace($fileName)) {
+        throw "Diagram output path must include a file name: $DiagramPath"
+    }
+
+    $directory = [System.IO.Path]::GetDirectoryName($DiagramPath)
+    $inventoryFileName = "$fileName-inventory.json"
+    $inventoryPath = if ([string]::IsNullOrEmpty($directory)) {
+        $inventoryFileName
+    }
+    else {
+        [System.IO.Path]::Combine($directory, $inventoryFileName)
+    }
+
+    if ([System.IO.Path]::GetFullPath($inventoryPath) -eq [System.IO.Path]::GetFullPath($DiagramPath)) {
+        throw 'Diagram and inventory output paths must be different.'
+    }
+
+    return $inventoryPath
+}
+
+# Allow the Pester suite to dot-source this script for the pure helper functions above
 # without launching the interactive wizard (which performs a live network scan).
 if ($MyInvocation.InvocationName -eq '.') { return }
 
@@ -503,6 +516,7 @@ $topology = [pscustomobject]@{
 # Step 5: Generate diagram
 Write-Host "`n[5/5] Generating your network diagram..." -ForegroundColor Yellow
 
+$inventoryPath = Get-InventoryOutputPath -DiagramPath $OutputPath
 $topology | Export-DrawIO -OutFile $OutputPath
 
 if (Test-Path $OutputPath) {
@@ -510,7 +524,8 @@ if (Test-Path $OutputPath) {
     Write-Host "      ✓ Created: $OutputPath ($fileSize bytes)" -ForegroundColor Green
 }
 
-# Save inventory for future use
+# Save inventory for future use. Every accepted diagram extension produces a
+# distinct sibling inventory file.
 $inventoryData = @{
     knownDevices = @($nodes | ForEach-Object {
         @{

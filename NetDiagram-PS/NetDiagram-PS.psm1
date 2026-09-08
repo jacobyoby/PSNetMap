@@ -1251,6 +1251,53 @@ function Compare-NetworkScans {
 
 #region Level 1: Credential-Free Discovery Functions
 
+function ConvertFrom-ArpText {
+    param(
+        [Parameter(Mandatory)][string[]]$Lines,
+        [Parameter(Mandatory)][ValidateSet('MacOS', 'LinuxIp', 'LinuxArp')][string]$Format,
+        [string]$InterfaceAlias
+    )
+
+    foreach ($line in $Lines) {
+        $entry = $null
+        if ($Format -eq 'MacOS') {
+            if ($line -notmatch '\s+at\s+') { continue }
+            if ($line -match '\s+at\s+\(incomplete\)') { continue }
+            if ($line -notmatch '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]{17})\s+on\s+(\S+)') {
+                throw "Unable to parse macOS ARP entry: $line"
+            }
+            $entry = [pscustomobject]@{
+                IPAddress = $matches[1]; MACAddress = $matches[2].ToUpperInvariant()
+                State = 'Reachable'; InterfaceAlias = $matches[3]; InterfaceIndex = $null
+            }
+        }
+        elseif ($Format -eq 'LinuxIp') {
+            if ($line -notmatch '\s+lladdr\s+') { continue }
+            if ($line -notmatch '^(\d+\.\d+\.\d+\.\d+)\s+dev\s+(\S+)\s+lladdr\s+([0-9a-fA-F:]{17})\s+(\S+)') {
+                throw "Unable to parse Linux ip-neigh entry: $line"
+            }
+            $entry = [pscustomobject]@{
+                IPAddress = $matches[1]; MACAddress = $matches[3].ToUpperInvariant()
+                State = $matches[4]; InterfaceAlias = $matches[2]; InterfaceIndex = $null
+            }
+        }
+        else {
+            if ($line -notmatch '\s+at\s+') { continue }
+            if ($line -notmatch '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]{17})') {
+                throw "Unable to parse Linux arp entry: $line"
+            }
+            $entry = [pscustomobject]@{
+                IPAddress = $matches[1]; MACAddress = $matches[2].ToUpperInvariant()
+                State = 'Reachable'; InterfaceAlias = $null; InterfaceIndex = $null
+            }
+        }
+
+        if (-not $InterfaceAlias -or $entry.InterfaceAlias -eq $InterfaceAlias) {
+            $entry
+        }
+    }
+}
+
 function Get-LocalARPTable {
     <#
     .SYNOPSIS
@@ -1258,6 +1305,8 @@ function Get-LocalARPTable {
     .DESCRIPTION
         Parses the ARP cache to find MAC addresses and IP addresses of devices
         that have recently communicated with this host. No credentials required.
+        Missing platform commands, command failures, and recognized-but-malformed
+        neighbor lines produce terminating errors instead of an empty-cache result.
     .PARAMETER InterfaceAlias
         Optional network interface to filter results
     .EXAMPLE
@@ -1275,12 +1324,11 @@ function Get-LocalARPTable {
         [string]$InterfaceAlias
     )
 
-    try {
-        $arpEntries = @()
-        
-        if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindows) {
+    $arpEntries = @()
+
+    if ($IsWindows) {
             # Windows: Use Get-NetNeighbor
-            $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue
+            $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction Stop
 
             if ($InterfaceAlias) {
                 $neighbors = $neighbors | Where-Object { $_.InterfaceAlias -eq $InterfaceAlias }
@@ -1295,75 +1343,36 @@ function Get-LocalARPTable {
                     InterfaceIndex  = $entry.InterfaceIndex
                 }
             }
-        } elseif ($IsMacOS) {
-            # macOS: Parse arp -an
+    }
+    elseif ($IsMacOS) {
+            $null = Get-Command arp -CommandType Application -ErrorAction Stop
             $arpOutput = & arp -an 2>&1
-            foreach ($line in $arpOutput) {
-                # Format: ? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]
-                if ($line -match '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)\s+on\s+(\w+)') {
-                    $ip = $matches[1]
-                    $mac = $matches[2]
-                    $interface = $matches[3]
-                    
-                    if (-not $InterfaceAlias -or $interface -eq $InterfaceAlias) {
-                        $arpEntries += [pscustomobject]@{
-                            IPAddress       = $ip
-                            MACAddress      = $mac
-                            State           = 'Reachable'
-                            InterfaceAlias  = $interface
-                            InterfaceIndex  = $null
-                        }
-                    }
-                }
+            if ($LASTEXITCODE -ne 0) {
+                throw "arp -an failed with exit code $LASTEXITCODE"
             }
-        } elseif ($IsLinux) {
-            # Linux: Parse ip neigh or arp
-            $neighborOutput = & ip neigh show 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                # Use ip neigh
-                foreach ($line in $neighborOutput) {
-                    # Format: 192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
-                    if ($line -match '(\d+\.\d+\.\d+\.\d+)\s+dev\s+(\w+)\s+lladdr\s+([0-9a-f:]+)\s+(\w+)') {
-                        $ip = $matches[1]
-                        $interface = $matches[2]
-                        $mac = $matches[3]
-                        $state = $matches[4]
-                        
-                        if (-not $InterfaceAlias -or $interface -eq $InterfaceAlias) {
-                            $arpEntries += [pscustomobject]@{
-                                IPAddress       = $ip
-                                MACAddress      = $mac
-                                State           = $state
-                                InterfaceAlias  = $interface
-                                InterfaceIndex  = $null
-                            }
-                        }
-                    }
+            $arpEntries = @(ConvertFrom-ArpText -Lines $arpOutput -Format MacOS -InterfaceAlias $InterfaceAlias)
+    }
+    elseif ($IsLinux) {
+            $ipCommand = Get-Command ip -CommandType Application -ErrorAction SilentlyContinue
+            if ($ipCommand) {
+                $neighborOutput = & $ipCommand.Source neigh show 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "ip neigh show failed with exit code $LASTEXITCODE"
                 }
-            } else {
-                # Fallback to arp command
-                $arpOutput = & arp -an 2>&1
-                foreach ($line in $arpOutput) {
-                    if ($line -match '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)') {
-                        $arpEntries += [pscustomobject]@{
-                            IPAddress       = $matches[1]
-                            MACAddress      = $matches[2]
-                            State           = 'Reachable'
-                            InterfaceAlias  = $null
-                            InterfaceIndex  = $null
-                        }
-                    }
-                }
+                $arpEntries = @(ConvertFrom-ArpText -Lines $neighborOutput -Format LinuxIp -InterfaceAlias $InterfaceAlias)
             }
-        }
+            else {
+                $arpCommand = Get-Command arp -CommandType Application -ErrorAction Stop
+                $arpOutput = & $arpCommand.Source -an 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "arp -an failed with exit code $LASTEXITCODE"
+                }
+                $arpEntries = @(ConvertFrom-ArpText -Lines $arpOutput -Format LinuxArp -InterfaceAlias $InterfaceAlias)
+            }
+    }
 
-        Write-Verbose "Found $($arpEntries.Count) ARP entries"
-        return $arpEntries
-    }
-    catch {
-        Write-Warning "Failed to retrieve ARP table: $_"
-        return @()
-    }
+    Write-Verbose "Found $($arpEntries.Count) ARP entries"
+    return $arpEntries
 }
 
 function Resolve-IPHostname {

@@ -1047,7 +1047,7 @@ Describe 'Export-DrawIO dynamic container layout (#19 regression)' {
         $containerBottom = ($containers | ForEach-Object {
             [double]$_.mxGeometry.y + [double]$_.mxGeometry.height
         } | Measure-Object -Maximum).Maximum
-        $unmatched = $xml.SelectSingleNode("//mxCell[@vertex='1' and contains(@value,'unmatched')]")
+        $unmatched = $xml.SelectSingleNode("//UserObject[contains(@label,'unmatched')]/mxCell")
         [double]$unmatched.mxGeometry.y | Should -BeGreaterThan $containerBottom
     }
 }

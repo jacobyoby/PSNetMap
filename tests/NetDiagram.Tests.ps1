@@ -57,6 +57,7 @@ Describe 'Module Import' {
         $commandNames | Should -Contain 'Export-Metadata'
         $commandNames | Should -Contain 'Export-Topology'
         $commandNames | Should -Contain 'Import-Topology'
+        $commandNames | Should -Contain 'Export-NodeInventoryCsv'
         $commandNames | Should -Contain 'Compare-NetworkScans'
     }
 }
@@ -467,6 +468,67 @@ Describe 'Topology persistence (#34 regression)' {
         $whatIfPath = Join-Path $script:TestDataPath 'topo-whatif.json'
         $topo | Export-Topology -OutFile $whatIfPath -WhatIf
         Test-Path $whatIfPath | Should -Be $false
+    }
+}
+
+Describe 'Export-NodeInventoryCsv (#41 regression)' {
+    It 'Writes nine columns in the stated order' {
+        $topo = Import-Inventory -Path $script:TestInventoryPath
+        $path = Join-Path $script:TestDataPath 'nodes.csv'
+        $topo | Export-NodeInventoryCsv -OutFile $path -Force
+        $header = (Get-Content $path -TotalCount 1).Trim()
+        $header | Should -Be 'IP,Hostname,Role,Layer,Vendor,OS,Reachable,MACAddress,OpenPorts'
+    }
+
+    It 'Renders the three Reachable states as unknown/reachable/unreachable' {
+        $topo = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='10.0.0.1'; Hostname='a'; Role='switch'; Layer='Access'; Vendor='X'; OS='X'; Reachable=$null }
+                [pscustomobject]@{ IP='10.0.0.2'; Hostname='b'; Role='switch'; Layer='Access'; Vendor='X'; OS='X'; Reachable=$true }
+                [pscustomobject]@{ IP='10.0.0.3'; Hostname='c'; Role='switch'; Layer='Access'; Vendor='X'; OS='X'; Reachable=$false }
+            )
+            Edges=@(); Subnets=@()
+        }
+        $path = Join-Path $script:TestDataPath 'reach.csv'
+        $topo | Export-NodeInventoryCsv -OutFile $path -Force
+        $rows = Import-Csv $path
+        ($rows | Where-Object IP -eq '10.0.0.1').Reachable | Should -Be 'unknown'
+        ($rows | Where-Object IP -eq '10.0.0.2').Reachable | Should -Be 'reachable'
+        ($rows | Where-Object IP -eq '10.0.0.3').Reachable | Should -Be 'unreachable'
+    }
+
+    It 'Round-trips a hostname containing a comma via Import-Csv' {
+        $topo = [pscustomobject]@{
+            Nodes = @([pscustomobject]@{ IP='10.0.0.5'; Hostname='a,b'; Role='switch'; Layer='Access'; Vendor='X'; OS='X'; Reachable=$true })
+            Edges=@(); Subnets=@()
+        }
+        $path = Join-Path $script:TestDataPath 'comma.csv'
+        $topo | Export-NodeInventoryCsv -OutFile $path -Force
+        $row = Import-Csv $path | Select-Object -First 1
+        $row.Hostname | Should -Be 'a,b'
+    }
+
+    It 'Writes header-only for an empty topology' {
+        $topo = [pscustomobject]@{ Nodes=@(); Edges=@(); Subnets=@() }
+        $path = Join-Path $script:TestDataPath 'empty.csv'
+        $topo | Export-NodeInventoryCsv -OutFile $path -Force
+        $lines = @(Get-Content $path)
+        $lines.Count | Should -Be 1
+        $lines[0] | Should -Be 'IP,Hostname,Role,Layer,Vendor,OS,Reachable,MACAddress,OpenPorts'
+    }
+
+    It 'Joins OpenPorts with semicolon and respects -Force/-WhatIf' {
+        $topo = [pscustomobject]@{
+            Nodes = @([pscustomobject]@{ IP='10.0.0.9'; Hostname='n'; Role='server'; Layer='Servers'; Vendor='X'; OS='X'; Reachable=$true; OpenPorts=@(80,443) })
+            Edges=@(); Subnets=@()
+        }
+        $path = Join-Path $script:TestDataPath 'ports.csv'
+        $topo | Export-NodeInventoryCsv -OutFile $path -Force
+        (Import-Csv $path).OpenPorts | Should -Be '80;443'
+        { $topo | Export-NodeInventoryCsv -OutFile $path } | Should -Throw "*already exists*Use -Force*"
+        $whatIf = Join-Path $script:TestDataPath 'csv-whatif.csv'
+        $topo | Export-NodeInventoryCsv -OutFile $whatIf -WhatIf
+        Test-Path $whatIf | Should -Be $false
     }
 }
 

@@ -31,6 +31,7 @@
         'Export-Metadata'
         'Export-Topology'
         'Import-Topology'
+        'Export-NodeInventoryCsv'
         'Compare-NetworkScans'
     )
 

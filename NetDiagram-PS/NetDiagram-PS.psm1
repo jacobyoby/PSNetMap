@@ -44,6 +44,124 @@ function New-EmptyTopology {
     }
 }
 
+# ── IPv4 CIDR helpers (moved from examples/New-NetworkDiagram.ps1 for #35)
+function ConvertTo-UInt32Address {
+    param([Parameter(Mandatory)][string]$IPAddress)
+    $bytes = [System.Net.IPAddress]::Parse($IPAddress).GetAddressBytes()
+    if ([System.BitConverter]::IsLittleEndian) { [Array]::Reverse($bytes) }
+    return [System.BitConverter]::ToUInt32($bytes, 0)
+}
+
+function ConvertFrom-UInt32Address {
+    param([Parameter(Mandatory)][uint32]$Value)
+    $bytes = [System.BitConverter]::GetBytes($Value)
+    if ([System.BitConverter]::IsLittleEndian) { [Array]::Reverse($bytes) }
+    return ([System.Net.IPAddress]::new($bytes)).ToString()
+}
+
+function Get-PrefixMask {
+    param([Parameter(Mandatory)][int]$PrefixLength)
+    if ($PrefixLength -le 0) { return [uint32]0 }
+    if ($PrefixLength -ge 32) { return [uint32]4294967295 }
+    return [uint32]((([uint64]4294967295) -shl (32 - $PrefixLength)) -band [uint64]4294967295)
+}
+
+function Get-SubnetScanTarget {
+    <#
+    .SYNOPSIS
+        Returns the list of host addresses (as UInt32 values) to scan within a subnet,
+        derived from the real network/broadcast bounds and bounded by scan depth.
+    #>
+    param(
+        [Parameter(Mandatory)][uint32]$NetworkValue,
+        [Parameter(Mandatory)][uint32]$BroadcastValue,
+        [ValidateSet('Quick', 'Medium', 'Full')][string]$ScanDepth = 'Quick',
+        [int]$MaxScanHosts = 1022
+    )
+
+    [int64]$firstHost   = [int64]$NetworkValue + 1
+    [int64]$lastHost    = [int64]$BroadcastValue - 1
+    [int64]$usableCount = if ($lastHost -ge $firstHost) { $lastHost - $firstHost + 1 } else { 0 }
+
+    $hostValues = [System.Collections.Generic.List[uint32]]::new()
+    if ($usableCount -le 0) {
+    }
+    elseif ($ScanDepth -eq 'Quick') {
+        $sampleCount = [int][Math]::Min(8, $usableCount)
+        for ($s = 0; $s -lt $sampleCount; $s++) {
+            $idx = [int][Math]::Floor($s * $usableCount / $sampleCount)
+            $null = $hostValues.Add([uint32]($firstHost + $idx))
+        }
+    }
+    elseif ($ScanDepth -eq 'Medium') {
+        $take = [int][Math]::Min(50, $usableCount)
+        for ($i = 0; $i -lt $take; $i++) { $null = $hostValues.Add([uint32]($firstHost + $i)) }
+    }
+    else {
+        $take = [int][Math]::Min($usableCount, $MaxScanHosts)
+        for ($i = 0; $i -lt $take; $i++) { $null = $hostValues.Add([uint32]($firstHost + $i)) }
+    }
+    return @($hostValues)
+}
+
+function Invoke-NetworkDiscovery {
+    <#
+    .SYNOPSIS
+        Discovers a topology for a single CIDR without requiring a repo clone
+    .DESCRIPTION
+        Enumerates host addresses for the given CIDR using the same prefix-aware math
+        as the wizard (Quick/Medium/Full with a /22 cap). Returns a Topology with
+        Nodes (Reachable = $null, to be probed via Test-DeviceReachability) and a
+        single Subnet entry. This makes discovery work after Install-Module.
+    .PARAMETER Cidr
+        IPv4 CIDR to enumerate, e.g. 192.168.1.0/24
+    .PARAMETER ScanDepth
+        Quick (8 sampled), Medium (first 50), Full (all usable up to /22 = 1022)
+    .EXAMPLE
+        Invoke-NetworkDiscovery -Cidr 192.168.1.0/24 -ScanDepth Quick | Export-DrawIO -OutFile out.drawio
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Cidr,
+
+        [Parameter()]
+        [ValidateSet('Quick', 'Medium', 'Full')]
+        [string]$ScanDepth = 'Quick'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Cidr)) { throw "Invalid CIDR value '$Cidr': expected IPv4 CIDR notation." }
+    $normalizedCidr = ConvertTo-NormalizedIPv4Cidr -Value $Cidr -Context "Invoke-NetworkDiscovery.Cidr"
+    $parts = $normalizedCidr -split '/'
+    $networkIp = $parts[0]
+    $prefix = [int]$parts[1]
+
+    $networkVal = ConvertTo-UInt32Address -IPAddress $networkIp
+    $mask = Get-PrefixMask -PrefixLength $prefix
+    $broadcastVal = [uint32]($networkVal -bor ((-bnot $mask) -band [uint32]4294967295))
+
+    $hosts = Get-SubnetScanTarget -NetworkValue $networkVal -BroadcastValue $broadcastVal -ScanDepth $ScanDepth
+
+    $nodes = foreach ($h in $hosts) {
+        $ip = ConvertFrom-UInt32Address -Value $h
+        [pscustomobject]@{
+            IP        = $ip
+            Hostname  = $ip
+            Role      = 'unknown'
+            Vendor    = 'Unknown'
+            OS        = 'Unknown'
+            Layer     = Get-LayerFromRole -Role 'unknown'
+            Reachable = $null
+        }
+    }
+
+    $topo = New-EmptyTopology
+    $topo.Nodes = @($nodes)
+    $topo.Subnets = @([pscustomobject]@{ CIDR = $normalizedCidr; Label = $normalizedCidr; VLAN = $null })
+    $topo.Edges = @()
+    return $topo
+}
+
 function ConvertTo-NormalizedIPv4Address {
     param(
         [Parameter(Mandatory)][string]$Value,
@@ -2245,6 +2363,7 @@ Export-ModuleMember -Function @(
     # Core inventory and topology
     'Import-Inventory'
     'Test-DeviceReachability'
+    'Invoke-NetworkDiscovery'
     'Merge-Edges'
 
     # Level 1: Credential-Free Discovery

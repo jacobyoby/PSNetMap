@@ -1221,60 +1221,67 @@ Describe 'Export-DrawIO dynamic container layout (#19 regression)' {
 }
 
 Describe 'Quick-start wizard CIDR math' {
-    BeforeAll {
-        # Dot-source the example; the dot-source guard returns before the wizard body
-        # runs, so only the pure CIDR helper functions get defined.
-        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
-        . $exampleScript
-    }
-
     It 'Computes the correct network address for a non-/24 prefix' {
-        $ipValue = ConvertTo-UInt32Address '10.0.5.37'
-        $mask    = Get-PrefixMask -PrefixLength 22
-        $network = ConvertFrom-UInt32Address ([uint32]($ipValue -band $mask))
-        $network | Should -Be '10.0.4.0'
+        InModuleScope 'NetDiagram-PS' {
+            $ipValue = ConvertTo-UInt32Address '10.0.5.37'
+            $mask    = Get-PrefixMask -PrefixLength 22
+            $network = ConvertFrom-UInt32Address ([uint32]($ipValue -band $mask))
+            $network | Should -Be '10.0.4.0'
+        }
     }
 
     It 'Round-trips an address through UInt32 conversion' {
-        ConvertFrom-UInt32Address (ConvertTo-UInt32Address '192.168.1.200') | Should -Be '192.168.1.200'
+        InModuleScope 'NetDiagram-PS' {
+            ConvertFrom-UInt32Address (ConvertTo-UInt32Address '192.168.1.200') | Should -Be '192.168.1.200'
+        }
     }
 
     It 'Enumerates all usable hosts of a /24 on Full depth' {
-        $net = ConvertTo-UInt32Address '192.168.1.0'
-        $bc  = ConvertTo-UInt32Address '192.168.1.255'
-        $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full')
-        $targets.Count | Should -Be 254
-        (ConvertFrom-UInt32Address $targets[0])  | Should -Be '192.168.1.1'
-        (ConvertFrom-UInt32Address $targets[-1]) | Should -Be '192.168.1.254'
+        InModuleScope 'NetDiagram-PS' {
+            $net = ConvertTo-UInt32Address '192.168.1.0'
+            $bc  = ConvertTo-UInt32Address '192.168.1.255'
+            $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full')
+            $targets.Count | Should -Be 254
+            (ConvertFrom-UInt32Address $targets[0])  | Should -Be '192.168.1.1'
+            (ConvertFrom-UInt32Address $targets[-1]) | Should -Be '192.168.1.254'
+        }
     }
 
     It 'Caps a large subnet (/16) at a /22 worth of hosts on Full depth' {
-        $net = ConvertTo-UInt32Address '10.1.0.0'
-        $bc  = ConvertTo-UInt32Address '10.1.255.255'
-        $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full' -MaxScanHosts 1022)
-        $targets.Count | Should -Be 1022
+        InModuleScope 'NetDiagram-PS' {
+            $net = ConvertTo-UInt32Address '10.1.0.0'
+            $bc  = ConvertTo-UInt32Address '10.1.255.255'
+            $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full' -MaxScanHosts 1022)
+            $targets.Count | Should -Be 1022
+        }
     }
 
     It 'Samples at most 8 in-range hosts on Quick depth' {
-        $net = ConvertTo-UInt32Address '192.168.1.0'
-        $bc  = ConvertTo-UInt32Address '192.168.1.255'
-        $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Quick')
-        $targets.Count | Should -BeLessOrEqual 8
-        $targets.Count | Should -BeGreaterThan 0
-        foreach ($t in $targets) {
-            (ConvertTo-UInt32Address (ConvertFrom-UInt32Address $t)) | Should -BeGreaterThan $net
-            (ConvertTo-UInt32Address (ConvertFrom-UInt32Address $t)) | Should -BeLessThan $bc
+        InModuleScope 'NetDiagram-PS' {
+            $net = ConvertTo-UInt32Address '192.168.1.0'
+            $bc  = ConvertTo-UInt32Address '192.168.1.255'
+            $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Quick')
+            $targets.Count | Should -BeLessOrEqual 8
+            $targets.Count | Should -BeGreaterThan 0
+            foreach ($t in $targets) {
+                (ConvertTo-UInt32Address (ConvertFrom-UInt32Address $t)) | Should -BeGreaterThan $net
+                (ConvertTo-UInt32Address (ConvertFrom-UInt32Address $t)) | Should -BeLessThan $bc
+            }
         }
     }
 
     It 'Returns no targets for a /31 point-to-point link' {
-        $net = ConvertTo-UInt32Address '10.0.0.0'
-        $bc  = ConvertTo-UInt32Address '10.0.0.1'
-        $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full')
-        $targets.Count | Should -Be 0
+        InModuleScope 'NetDiagram-PS' {
+            $net = ConvertTo-UInt32Address '10.0.0.0'
+            $bc  = ConvertTo-UInt32Address '10.0.0.1'
+            $targets = @(Get-SubnetScanTarget -NetworkValue $net -BroadcastValue $bc -ScanDepth 'Full')
+            $targets.Count | Should -Be 0
+        }
     }
 
     It 'Builds a sibling inventory path for a .xml output path' {
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
         $outputPath = Join-Path $script:TestDataPath 'office.xml'
         $inventoryPath = Get-WizardInventoryPath -OutputPath $outputPath
 
@@ -1283,6 +1290,8 @@ Describe 'Quick-start wizard CIDR math' {
     }
 
     It 'Builds a sibling inventory path for an extensionless output path' {
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
         $outputPath = Join-Path $script:TestDataPath 'office'
         $inventoryPath = Get-WizardInventoryPath -OutputPath $outputPath
 
@@ -1382,6 +1391,28 @@ Describe 'Quick-start wizard interface selection (#15 regression)' {
 
         { Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'missing0' } |
             Should -Throw '*was not found*'
+    }
+}
+
+Describe 'Invoke-NetworkDiscovery (#35 regression)' {
+    It 'Enumerates Quick/Medium/Full with the same counts as the helper and caps Full at /22' {
+        (Invoke-NetworkDiscovery -Cidr '192.168.1.0/24' -ScanDepth Quick).Nodes.Count | Should -BeLessOrEqual 8
+        (Invoke-NetworkDiscovery -Cidr '192.168.1.0/24' -ScanDepth Medium).Nodes.Count | Should -Be 50
+        (Invoke-NetworkDiscovery -Cidr '192.168.1.0/24' -ScanDepth Full).Nodes.Count | Should -Be 254
+        (Invoke-NetworkDiscovery -Cidr '10.1.0.0/16' -ScanDepth Full).Nodes.Count | Should -Be 1022
+        (Invoke-NetworkDiscovery -Cidr '10.0.0.0/31' -ScanDepth Full).Nodes.Count | Should -Be 0
+    }
+
+    It 'Throws naming the invalid CIDR value' {
+        { Invoke-NetworkDiscovery -Cidr 'not-a-cidr' -ScanDepth Quick } | Should -Throw "*not-a-cidr*"
+        { Invoke-NetworkDiscovery -Cidr '999.999.0.0/24' -ScanDepth Quick } | Should -Throw "*999.999.0.0*"
+    }
+
+    It 'Pipes to Export-DrawIO without a repo clone' {
+        $topo = Invoke-NetworkDiscovery -Cidr '10.0.0.0/24' -ScanDepth Quick
+        $path = Join-Path $script:TestDataPath 'discovery.drawio'
+        $topo | Export-DrawIO -OutFile $path -Force
+        Test-Path $path | Should -Be $true
     }
 }
 

@@ -13,6 +13,7 @@
         # Core inventory and topology
         'Import-Inventory'
         'Test-DeviceReachability'
+        'Invoke-NetworkDiscovery'
         'Merge-Edges'
 
         # Level 1: Credential-Free Discovery

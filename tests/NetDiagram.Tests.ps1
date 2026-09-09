@@ -432,6 +432,38 @@ Describe 'Resolve-IPHostname' {
         $result.IPAddress | Should -Be '192.0.2.1'
         $result.Success | Should -Be $false
     }
+
+    It 'Returns within the configured deadline for a stalled resolver task' {
+        InModuleScope 'NetDiagram-PS' {
+            $source = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+            $result = Wait-DnsLookupTask -LookupTask $source.Task `
+                -IPAddress '192.0.2.10' -TimeoutSeconds 1
+            $stopwatch.Stop()
+
+            $result.IPAddress | Should -Be '192.0.2.10'
+            $result.Hostname | Should -BeNullOrEmpty
+            $result.Success | Should -Be $false
+            $stopwatch.Elapsed.TotalSeconds | Should -BeLessThan 2.5
+        }
+    }
+
+    It 'Returns a failure immediately for a faulted resolver task' {
+        InModuleScope 'NetDiagram-PS' {
+            $source = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $source.SetException([InvalidOperationException]::new('fixture failure'))
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+            $result = Wait-DnsLookupTask -LookupTask $source.Task `
+                -IPAddress '192.0.2.11' -TimeoutSeconds 5
+            $stopwatch.Stop()
+
+            $result.IPAddress | Should -Be '192.0.2.11'
+            $result.Success | Should -Be $false
+            $stopwatch.Elapsed.TotalSeconds | Should -BeLessThan 1
+        }
+    }
 }
 
 Describe 'Invoke-SnmpWalk' {
@@ -681,5 +713,69 @@ Describe 'Quick-start wizard output paths (#9 regression)' {
         $inventoryPath | Should -Be (Join-Path $TestDrive 'office-inventory.json')
         [System.IO.Path]::GetFullPath($inventoryPath) |
             Should -Not -Be ([System.IO.Path]::GetFullPath($diagramPath))
+    }
+}
+
+Describe 'Quick-start wizard interface selection (#15 regression)' {
+    BeforeAll {
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
+    }
+
+    It 'Selects the Windows address attached to the default route index' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'VPN'; Index = 7; IPAddress = '10.8.0.2'; PrefixLength = 24 }
+            [pscustomobject]@{ Name = 'Ethernet'; Index = 12; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+        )
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -DefaultInterfaceIndex 12
+        $selected.Name | Should -Be 'Ethernet'
+        $selected.IPAddress | Should -Be '192.168.1.20'
+    }
+
+    It 'Retains macOS interface names and selects the default-route interface' {
+        $interfaces = @(ConvertFrom-MacOSInterfaceText -Lines @(
+            'utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380'
+            '    inet 10.8.0.2 --> 10.8.0.2 netmask 0xffffffff'
+            'en0: flags=8863<UP,BROADCAST,SMART,RUNNING> mtu 1500'
+            '    inet 192.168.50.12 netmask 0xffffff00 broadcast 192.168.50.255'
+        ))
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -DefaultInterfaceName 'en0'
+        $selected.Name | Should -Be 'en0'
+        $selected.PrefixLength | Should -Be 24
+    }
+
+    It 'Retains Linux interface names and honors an explicit selector' {
+        $interfaces = @(ConvertFrom-LinuxInterfaceText -Lines @(
+            '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500'
+            '    inet 192.168.1.20/24 brd 192.168.1.255 scope global eth0'
+            '5: wg0: <POINTOPOINT,UP,LOWER_UP> mtu 1420'
+            '    inet 10.8.0.2/24 scope global wg0'
+        ))
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'wg0' `
+            -DefaultInterfaceName 'eth0'
+        $selected.Name | Should -Be 'wg0'
+        $selected.IPAddress | Should -Be '10.8.0.2'
+    }
+
+    It 'Fails clearly when multiple interfaces exist without a default route' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'eth0'; Index = 2; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+            [pscustomobject]@{ Name = 'wg0'; Index = 5; IPAddress = '10.8.0.2'; PrefixLength = 24 }
+        )
+
+        { Select-ScanInterface -Interfaces $interfaces } |
+            Should -Throw '*Use -InterfaceName*'
+    }
+
+    It 'Fails clearly for an unavailable explicit selector' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'eth0'; Index = 2; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+        )
+
+        { Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'missing0' } |
+            Should -Throw '*was not found*'
     }
 }

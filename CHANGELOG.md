@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OUI coverage (built-in table remains a 31-prefix sample).
 
 ### Changed
+- **`Resolve-SnmpCredentialConfig` accepts IPv6 CIDR keys.** Longest-prefix
+  match works on mixed v4/v6 maps. A wrong-family lookup returns no
+  credential (or `Default`); invalid CIDR keys still fail closed.
 - **`Import-Inventory` accepts dual-stack addresses.** Device `ip` and subnet
   `cidr` values may be IPv4 or IPv6. Both families are normalized (canonical
   string form; CIDR host bits cleared). Uniqueness is the normalized address

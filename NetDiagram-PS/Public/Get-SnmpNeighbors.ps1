@@ -9,7 +9,7 @@ function Get-SnmpNeighbors {
         does not assign verified L2-SNMP confidence because it does not fully correlate
         structured LLDP/CDP table rows.
 
-        CREDENTIAL MATCHING: The most specific matching IPv4 CIDR wins regardless of
+        CREDENTIAL MATCHING: The most specific matching IPv4 or IPv6 CIDR wins regardless of
         JSON property order. Default is used only when no CIDR matches. If the selected
         entry has no available community secret, the node is skipped unless -TryPublic
         was explicitly supplied.

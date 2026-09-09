@@ -159,6 +159,13 @@ Create a JSON file with your network devices:
       "role": "server",
       "vendor": "Dell",
       "os": "Ubuntu 22.04"
+    },
+    {
+      "ip": "2001:db8::1",
+      "hostname": "my-v6-router",
+      "role": "router",
+      "vendor": "Cisco",
+      "os": "IOS 15.x"
     }
   ],
   "subnets": [
@@ -166,6 +173,11 @@ Create a JSON file with your network devices:
       "cidr": "192.168.1.0/24",
       "label": "Main Network",
       "vlan": 1
+    },
+    {
+      "cidr": "2001:db8::/32",
+      "label": "IPv6 Lab",
+      "vlan": 100
     }
   ]
 }
@@ -173,12 +185,17 @@ Create a JSON file with your network devices:
 
 Supported roles: `router`, `core-router`, `distribution`, `switch`, `server`, `workstation`
 
-The stable inventory contract is IPv4-only. `knownDevices` is required and must be a
-JSON array; `subnets`, when present, must also be an array. Each device requires a unique
-IPv4 `ip`, and each subnet requires an IPv4 `cidr` with a prefix from 0 through 32.
-Addresses are normalized, and host bits in CIDRs are cleared (for example,
-`192.168.1.42/24` becomes `192.168.1.0/24`). IPv6 is rejected explicitly. Unknown or
-omitted roles remain valid and are placed in the Access layer.
+The inventory contract is dual-stack. `knownDevices` is required and must be a
+JSON array; `subnets`, when present, must also be an array. Each device has one
+identity `ip` (IPv4 or IPv6), and each subnet requires a matching-family `cidr`
+(IPv4 prefix 0–32, IPv6 prefix 0–128). Addresses are normalized to canonical
+form, and host bits in CIDRs are cleared (for example, `192.168.1.42/24`
+becomes `192.168.1.0/24` and `2001:db8::1/32` becomes `2001:db8::/32`).
+Uniqueness is the normalized address string, so compressed and expanded IPv6
+forms that parse to the same address are duplicates. A dual-stack host that
+must appear on both families is two rows; when only one identity is needed,
+prefer the IPv4 address. Mixed-family subnet placement does not match.
+Unknown or omitted roles remain valid and are placed in the Access layer.
 
 See `examples/inventory-template.json` for a complete template.
 

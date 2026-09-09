@@ -4,10 +4,10 @@ function Import-Inventory {
         Imports network inventory from JSON file
     .DESCRIPTION
         Reads a JSON inventory file and creates a Topology object with Nodes and Subnets.
-        The stable inventory contract is IPv4-only. Device addresses and subnet CIDRs
-        are validated and normalized; subnet host bits are cleared. Duplicate device
-        addresses are rejected. Unknown or omitted roles are retained and placed in the
-        Access layer.
+        The inventory contract is dual-stack. Each device has one identity address
+        (IPv4 or IPv6). Device addresses and subnet CIDRs are validated and normalized;
+        subnet host bits are cleared. Duplicate normalized addresses are rejected.
+        Unknown or omitted roles are retained and placed in the Access layer.
     .PARAMETER Path
         Path to the inventory JSON file
     .EXAMPLE
@@ -56,7 +56,7 @@ function Import-Inventory {
                 throw "Invalid inventory knownDevices[$deviceIndex]: missing string 'ip'"
             }
 
-            $normalizedIP = ConvertTo-NormalizedIPv4Address -Value $device.ip -Context "knownDevices[$deviceIndex].ip"
+            $normalizedIP = ConvertTo-NormalizedIPAddress -Value $device.ip -Context "knownDevices[$deviceIndex].ip"
             if (-not $deviceAddresses.Add($normalizedIP)) {
                 throw "Invalid inventory knownDevices[$deviceIndex].ip '$normalizedIP': duplicate device address"
             }
@@ -88,7 +88,7 @@ function Import-Inventory {
                     throw "Invalid inventory subnets[$subnetIndex]: missing string 'cidr'"
                 }
 
-                $normalizedCidr = ConvertTo-NormalizedIPv4Cidr -Value $subnet.cidr -Context "subnets[$subnetIndex].cidr"
+                $normalizedCidr = ConvertTo-NormalizedCidr -Value $subnet.cidr -Context "subnets[$subnetIndex].cidr"
                 if (-not $subnetCidrs.Add($normalizedCidr)) {
                     throw "Invalid inventory subnets[$subnetIndex].cidr '$normalizedCidr': duplicate subnet"
                 }

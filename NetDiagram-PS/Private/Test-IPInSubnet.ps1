@@ -21,10 +21,10 @@ function Test-IPInSubnet {
     }
 
     $networkAddressString = $cidrParts[0]
-    if (-not [int]::TryParse($cidrParts[1], [ref]$null)) {
+    $prefixLength = 0
+    if (-not [int]::TryParse($cidrParts[1], [ref]$prefixLength)) {
         return $false
     }
-    $prefixLength = [int]$cidrParts[1]
 
     try {
         $ipAddress = [System.Net.IPAddress]::Parse($IP)

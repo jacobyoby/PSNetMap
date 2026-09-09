@@ -1898,6 +1898,123 @@ Describe 'Quick-start wizard interface selection (#15 regression)' {
         { Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'missing0' } |
             Should -Throw '*was not found*'
     }
+
+    It 'Prefers IPv4 on a dual-stack interface and still honors -InterfaceName' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'en0'; Index = 2; IPAddress = '192.168.50.12'; PrefixLength = 24; AddressFamily = 'IPv4' }
+            [pscustomobject]@{ Name = 'en0'; Index = 2; IPAddress = '2001:db8::12'; PrefixLength = 64; AddressFamily = 'IPv6' }
+            [pscustomobject]@{ Name = 'utun4'; Index = 15; IPAddress = '10.8.0.2'; PrefixLength = 24; AddressFamily = 'IPv4' }
+        )
+
+        $fromRoute = Select-ScanInterface -Interfaces $interfaces -DefaultInterfaceName 'en0'
+        $fromRoute.IPAddress | Should -Be '192.168.50.12'
+
+        $related = @(Get-RelatedInterfaceAddress -Interfaces $interfaces -Selected $fromRoute)
+        $related.IPAddress | Should -Contain '192.168.50.12'
+        $related.IPAddress | Should -Contain '2001:db8::12'
+
+        $explicit = Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'en0' -DefaultInterfaceName 'utun4'
+        $explicit.Name | Should -Be 'en0'
+        $explicit.IPAddress | Should -Be '192.168.50.12'
+    }
+
+    It 'Selects an IPv6-only default-route interface' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'eth0'; Index = 2; IPAddress = '2001:db8::20'; PrefixLength = 64; AddressFamily = 'IPv6' }
+            [pscustomobject]@{ Name = 'eth0'; Index = 2; IPAddress = 'fe80::20'; PrefixLength = 64; AddressFamily = 'IPv6' }
+        )
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -DefaultInterfaceIndex 2
+        $selected.IPAddress | Should -Be '2001:db8::20'
+    }
+
+    It 'Parses inet6 from macOS ifconfig and Linux ip addr text' {
+        $mac = @(ConvertFrom-MacOSInterfaceText -Lines @(
+            'en0: flags=8863<UP,BROADCAST,SMART,RUNNING> mtu 1500'
+            '    inet 192.168.50.12 netmask 0xffffff00 broadcast 192.168.50.255'
+            '    inet6 fe80::1%en0 prefixlen 64 scopeid 0x5'
+            '    inet6 2001:db8::12 prefixlen 64'
+        ))
+        $mac.IPAddress | Should -Contain '192.168.50.12'
+        $mac.IPAddress | Should -Contain '2001:db8::12'
+        $mac.IPAddress | Should -Contain 'fe80::1'
+
+        $linux = @(ConvertFrom-LinuxInterfaceText -Lines @(
+            '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500'
+            '    inet 192.168.1.20/24 brd 192.168.1.255 scope global eth0'
+            '    inet6 2001:db8::20/64 scope global'
+            '    inet6 fe80::aabb/64 scope link'
+        ))
+        $linux.IPAddress | Should -Contain '192.168.1.20'
+        $linux.IPAddress | Should -Contain '2001:db8::20'
+        $linux.IPAddress | Should -Contain 'fe80::aabb'
+    }
+}
+
+Describe 'Quick-start wizard IPv6 neighbor discovery (#61)' {
+    BeforeAll {
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
+    }
+
+    It 'Includes at least one IPv6 neighbor from a dual-stack fixture table' {
+        $neighbors = @(
+            [pscustomobject]@{
+                IPAddress = '192.168.1.1'; MACAddress = 'AA:BB:CC:DD:EE:01'
+                State = 'REACHABLE'; InterfaceAlias = 'eth0'; AddressFamily = 'IPv4'
+            }
+            [pscustomobject]@{
+                IPAddress = '2001:db8::10'; MACAddress = 'AA:BB:CC:DD:EE:02'
+                State = 'REACHABLE'; InterfaceAlias = 'eth0'; AddressFamily = 'IPv6'
+            }
+            [pscustomobject]@{
+                IPAddress = '2001:db8::1'; MACAddress = 'AA:BB:CC:DD:EE:03'
+                State = 'Incomplete'; InterfaceAlias = 'eth0'; AddressFamily = 'IPv6'
+            }
+            [pscustomobject]@{
+                IPAddress = 'fe80::abcd'; MACAddress = 'AA:BB:CC:DD:EE:04'
+                State = 'STALE'; InterfaceAlias = 'eth0'; AddressFamily = 'IPv6'
+            }
+        )
+
+        $nodes = @(
+            [pscustomobject]@{
+                IP = '192.168.1.20'; Hostname = 'this-host'; Role = 'workstation'
+                Vendor = 'Local'; OS = 'Test'; Layer = 'Access'; Reachable = $true
+            }
+            [pscustomobject]@{
+                IP = '2001:db8::20'; Hostname = 'this-host'; Role = 'workstation'
+                Vendor = 'Local'; OS = 'Test'; Layer = 'Access'; Reachable = $true
+            }
+        )
+        $skip = @('192.168.1.20', '2001:db8::20')
+        $neighborNodes = @(ConvertTo-WizardNeighborNode -NeighborEntries $neighbors -SkipIPs $skip -InterfaceName 'eth0')
+        $neighborNodes.IP | Should -Contain '2001:db8::10'
+        $neighborNodes.IP | Should -Not -Contain '192.168.1.1'
+        $neighborNodes.IP | Should -Not -Contain '2001:db8::1'
+        $nodes += $neighborNodes
+
+        $subnets = @(
+            [pscustomobject]@{ CIDR = '192.168.1.0/24'; Label = 'Local Network'; VLAN = $null }
+            [pscustomobject]@{ CIDR = '2001:db8::20/64'; Label = 'IPv6 Local Network'; VLAN = $null }
+        )
+        $inventory = New-WizardInventoryObject -Nodes $nodes -Subnets $subnets
+        $path = Join-Path $TestDrive 'wizard-dual-stack-inventory.json'
+        $inventory | ConvertTo-Json -Depth 10 | Set-Content -Path $path
+
+        $imported = Import-Inventory -Path $path
+        $imported.Nodes.IP | Should -Contain '2001:db8::10'
+        $imported.Nodes.IP | Should -Contain '192.168.1.20'
+        $imported.Subnets.CIDR | Should -Contain '192.168.1.0/24'
+        $imported.Subnets.CIDR | Should -Contain '2001:db8::/64'
+    }
+
+    It 'Rejects a huge wizard IPv6 -Cidr with an actionable message' {
+        { ConvertFrom-WizardCidr -Cidr '2001:db8::/64' } | Should -Throw '*Get-LocalARPTable*'
+        { ConvertFrom-WizardCidr -Cidr '2001:db8::/64' } | Should -Throw '*/120*'
+        { ConvertFrom-WizardCidr -Cidr '2001:db8::/120' } | Should -Not -Throw
+        (ConvertFrom-WizardCidr -Cidr '2001:db8::/120').AddressFamily | Should -Be 'IPv6'
+    }
 }
 
 Describe 'Invoke-NetworkDiscovery (#35 regression)' {
@@ -1919,6 +2036,24 @@ Describe 'Invoke-NetworkDiscovery (#35 regression)' {
         $path = Join-Path $script:TestDataPath 'discovery.drawio'
         $topo | Export-DrawIO -OutFile $path -Force
         Test-Path $path | Should -Be $true
+    }
+
+    It 'Enumerates a small IPv6 prefix and rejects a huge v6 sweep (#61)' {
+        $quick = Invoke-NetworkDiscovery -Cidr '2001:db8::/120' -ScanDepth Quick
+        $quick.Nodes.Count | Should -BeLessOrEqual 8
+        $quick.Nodes.Count | Should -BeGreaterThan 0
+        $quick.Subnets[0].CIDR | Should -Be '2001:db8::/120'
+        $quick.Nodes.IP | Should -Contain '2001:db8::'
+
+        $fullSmall = Invoke-NetworkDiscovery -Cidr '2001:db8::/124' -ScanDepth Full
+        $fullSmall.Nodes.Count | Should -Be 16
+
+        { Invoke-NetworkDiscovery -Cidr '2001:db8::/64' -ScanDepth Quick } |
+            Should -Throw '*Get-LocalARPTable*'
+        { Invoke-NetworkDiscovery -Cidr '2001:db8::/64' -ScanDepth Quick } |
+            Should -Throw '*/120*'
+        { Invoke-NetworkDiscovery -Cidr '2001:db8::/32' -ScanDepth Full } |
+            Should -Throw '*too large to sweep*'
     }
 }
 

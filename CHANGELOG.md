@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Export-DrawIO` L2-FDB edge style.** Bridge forwarding-table edges (`Confidence='L2-FDB'`)
   were falling through to the gray dotted “unknown” default. They now use a dedicated
   solid teal stroke (between verified L2-SNMP green and dashed amber heuristic).
+- **Quick-start wizard now uses tri-state reachability.** Connectivity checks go
+  through `Test-DeviceReachability` instead of `Test-Connection -Quiet`, so a
+  local send failure stays `$null` (Unknown) rather than being painted
+  Unreachable. Optional `-TcpFallbackPort` is forwarded to the same helper.
+  The step-[4/5] summary reports reachable, unreachable, and unknown counts.
 
 ## [1.3.0] - 2026-07-30
 

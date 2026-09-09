@@ -18,6 +18,9 @@
     used by the active IPv4 default route is selected.
 .PARAMETER DnsTimeoutSeconds
     Maximum time for each reverse DNS lookup during discovery (default: 2 seconds).
+.PARAMETER TcpFallbackPort
+    Optional TCP port forwarded to Test-DeviceReachability. When ICMP is silent,
+    a successful connect on this port promotes the host to reachable.
 .EXAMPLE
     .\New-NetworkDiagram.ps1
 
@@ -26,6 +29,10 @@
     .\New-NetworkDiagram.ps1 -ScanDepth Medium -OutputPath .\office-network.drawio
 
     Medium scan with custom output location
+.EXAMPLE
+    .\New-NetworkDiagram.ps1 -TcpFallbackPort 443
+
+    Use TCP 443 as a fallback when ICMP is blocked
 #>
 
 [CmdletBinding()]
@@ -38,7 +45,10 @@ param(
     [string]$InterfaceName,
 
     [ValidateRange(1, 30)]
-    [int]$DnsTimeoutSeconds = 2
+    [int]$DnsTimeoutSeconds = 2,
+
+    [ValidateRange(1, 65535)]
+    [int]$TcpFallbackPort
 )
 
 function Get-WizardInventoryPath {
@@ -185,6 +195,189 @@ function Select-ScanInterface {
     }
 
     throw 'No IPv4 default-route interface could be selected. Use -InterfaceName with an available interface name or index.'
+}
+
+function Invoke-WizardReachabilityProbe {
+    <#
+    .SYNOPSIS
+        Probe a node list with Test-DeviceReachability (true / false / $null).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Nodes,
+
+        [Parameter()]
+        [int]$TimeoutSeconds = 1,
+
+        [Parameter()]
+        [int]$MaxParallel = 32,
+
+        [Parameter()]
+        [ValidateRange(1, 65535)]
+        [int]$TcpFallbackPort,
+
+        [Parameter()]
+        [scriptblock]$ProbeScript
+    )
+
+    if ($null -eq $Nodes -or $Nodes.Count -eq 0) {
+        return
+    }
+
+    $topology = [pscustomobject]@{
+        Nodes   = $Nodes
+        Edges   = @()
+        Subnets = @()
+    }
+
+    $params = @{
+        Topology       = $topology
+        TimeoutSeconds = $TimeoutSeconds
+        MaxParallel    = $MaxParallel
+    }
+    if ($PSBoundParameters.ContainsKey('TcpFallbackPort')) {
+        $params.TcpFallbackPort = $TcpFallbackPort
+    }
+    if ($ProbeScript) {
+        $params.ProbeScript = $ProbeScript
+    }
+
+    $null = Test-DeviceReachability @params
+}
+
+function Update-WizardNodeReachability {
+    <#
+    .SYNOPSIS
+        Test previously untested wizard nodes via Test-DeviceReachability.
+    .DESCRIPTION
+        Leaves already-probed Reachable values untouched. Local send failures stay
+        $null (Unknown) instead of collapsing to $false the way Test-Connection
+        -Quiet does.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Nodes,
+
+        [Parameter()]
+        [int]$TimeoutSeconds = 2,
+
+        [Parameter()]
+        [int]$MaxParallel = 32,
+
+        [Parameter()]
+        [ValidateRange(1, 65535)]
+        [int]$TcpFallbackPort,
+
+        [Parameter()]
+        [scriptblock]$ProbeScript
+    )
+
+    $untested = @($Nodes | Where-Object { $null -eq $_.Reachable })
+    $probeParams = @{
+        Nodes          = $untested
+        TimeoutSeconds = $TimeoutSeconds
+        MaxParallel    = $MaxParallel
+    }
+    if ($PSBoundParameters.ContainsKey('TcpFallbackPort')) {
+        $probeParams.TcpFallbackPort = $TcpFallbackPort
+    }
+    if ($ProbeScript) {
+        $probeParams.ProbeScript = $ProbeScript
+    }
+
+    Invoke-WizardReachabilityProbe @probeParams
+    return $Nodes
+}
+
+function Find-WizardReachableScanHosts {
+    <#
+    .SYNOPSIS
+        Probe scan targets and return only confirmed-reachable hosts.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]]$ScanTargets,
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$SkipIPs = @(),
+
+        [Parameter()]
+        [int]$TimeoutSeconds = 1,
+
+        [Parameter()]
+        [int]$MaxParallel = 20,
+
+        [Parameter()]
+        [ValidateRange(1, 65535)]
+        [int]$TcpFallbackPort,
+
+        [Parameter()]
+        [scriptblock]$ProbeScript
+    )
+
+    $skip = @{}
+    foreach ($ip in @($SkipIPs)) {
+        if (-not [string]::IsNullOrWhiteSpace($ip)) {
+            $skip[$ip] = $true
+        }
+    }
+
+    $candidates = @(
+        $ScanTargets | Where-Object { $_ -and -not $skip.ContainsKey($_) } | ForEach-Object {
+            [pscustomobject]@{
+                IP        = $_
+                Hostname  = $null
+                Role      = 'unknown'
+                Vendor    = 'Unknown'
+                OS        = 'Unknown'
+                Layer     = 'Access'
+                Reachable = $null
+            }
+        }
+    )
+
+    $probeParams = @{
+        Nodes          = $candidates
+        TimeoutSeconds = $TimeoutSeconds
+        MaxParallel    = $MaxParallel
+    }
+    if ($PSBoundParameters.ContainsKey('TcpFallbackPort')) {
+        $probeParams.TcpFallbackPort = $TcpFallbackPort
+    }
+    if ($ProbeScript) {
+        $probeParams.ProbeScript = $ProbeScript
+    }
+
+    Invoke-WizardReachabilityProbe @probeParams
+    return @($candidates | Where-Object { $_.Reachable -eq $true })
+}
+
+function Get-WizardReachabilitySummary {
+    <#
+    .SYNOPSIS
+        Count reachable, unreachable, and unknown (indeterminate) nodes.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Nodes
+    )
+
+    $list = @($Nodes)
+    [pscustomobject]@{
+        Reachable   = @($list | Where-Object { $_.Reachable -eq $true }).Count
+        Unreachable = @($list | Where-Object { $_.Reachable -eq $false }).Count
+        Unknown     = @($list | Where-Object { $null -eq $_.Reachable }).Count
+        Total       = $list.Count
+    }
 }
 
 function ConvertFrom-MacOSInterfaceText {
@@ -512,19 +705,24 @@ $scanTargets = @($hostValues | ForEach-Object { ConvertFrom-UInt32Address $_ })
 Write-Host "      Scan depth: $ScanDepth ($($scanTargets.Count) addresses in $cidr)" -ForegroundColor Cyan
 Write-Host "      This may take 10-60 seconds..." -ForegroundColor Gray
 
+$skipIPs = @($myIP, $gateway) + @($dnsServers)
+$discoverParams = @{
+    ScanTargets    = $scanTargets
+    SkipIPs        = $skipIPs
+    TimeoutSeconds = 1
+    MaxParallel    = 20
+}
+if ($PSBoundParameters.ContainsKey('TcpFallbackPort')) {
+    $discoverParams.TcpFallbackPort = $TcpFallbackPort
+}
+$reachableScanHosts = @(Find-WizardReachableScanHosts @discoverParams)
+
 $discovered = [System.Collections.Concurrent.ConcurrentBag[object]]::new()
 
-$scanTargets | ForEach-Object -Parallel {
-    $testIP = $_
+if ($reachableScanHosts.Count -gt 0) {
+    $reachableScanHosts | ForEach-Object -Parallel {
+        $testIP = $_.IP
 
-    # Skip IPs we already have
-    if ($testIP -in @($using:myIP, $using:gateway) + $using:dnsServers) {
-        return
-    }
-
-    $result = Test-Connection -ComputerName $testIP -Count 1 -TimeoutSeconds 1 -Quiet -ErrorAction SilentlyContinue
-
-    if ($result) {
         $hostname = try {
             if (-not (Get-Command Resolve-IPHostname -ErrorAction SilentlyContinue)) {
                 Import-Module $using:modulePath -Force
@@ -545,8 +743,8 @@ $scanTargets | ForEach-Object -Parallel {
             Hostname = $hostname
             Reachable = $true
         })
-    }
-} -ThrottleLimit 20
+    } -ThrottleLimit 20
+}
 
 $discoveredDevices = @($discovered)
 
@@ -580,17 +778,20 @@ if ($discoveredDevices.Count -gt 0) {
     Write-Host "      No additional devices found (ICMP may be blocked)" -ForegroundColor Yellow
 }
 
-# Step 4: Test reachability
+# Step 4: Test reachability (tri-state: true / false / $null)
 Write-Host "`n[4/5] Testing connectivity..." -ForegroundColor Yellow
 
-foreach ($node in $nodes) {
-    if ($null -eq $node.Reachable) {
-        $node.Reachable = Test-Connection -ComputerName $node.IP -Count 1 -TimeoutSeconds 2 -Quiet -ErrorAction SilentlyContinue
-    }
+$reachParams = @{
+    Nodes          = $nodes
+    TimeoutSeconds = 2
 }
+if ($PSBoundParameters.ContainsKey('TcpFallbackPort')) {
+    $reachParams.TcpFallbackPort = $TcpFallbackPort
+}
+$null = Update-WizardNodeReachability @reachParams
 
-$reachableCount = @($nodes | Where-Object { $_.Reachable }).Count
-Write-Host "      $reachableCount of $($nodes.Count) devices are reachable" -ForegroundColor Green
+$reachSummary = Get-WizardReachabilitySummary -Nodes $nodes
+Write-Host "      $($reachSummary.Reachable) reachable, $($reachSummary.Unreachable) unreachable, $($reachSummary.Unknown) unknown of $($reachSummary.Total) devices" -ForegroundColor Green
 
 # Create topology object
 $topology = [pscustomobject]@{

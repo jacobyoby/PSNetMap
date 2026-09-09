@@ -166,8 +166,29 @@ Describe 'Test-DeviceReachability' {
 
         foreach ($node in $topology.Nodes) {
             $node.Reachable | Should -Not -BeNullOrEmpty
-            $node.Reachable | Should -BeOfType [bool]
         }
+    }
+
+    It 'Distinguishes reachable, unreachable, and indeterminate (local send failure)' {
+        $topo = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='10.0.0.1'; Hostname='a'; Role='switch'; Layer='Access'; Vendor='X'; OS='X'; Reachable=$null }
+                [pscustomobject]@{ IP='10.0.0.2'; Hostname='b'; Role='switch'; Layer='Access'; Vendor='X'; OS='X'; Reachable=$null }
+                [pscustomobject]@{ IP='10.0.0.3'; Hostname='c'; Role='switch'; Layer='Access'; Vendor='X'; OS='X'; Reachable=$null }
+            )
+            Edges=@(); Subnets=@()
+        }
+        $probe = {
+            param($IP)
+            if ($IP -eq '10.0.0.1') { return $true }
+            if ($IP -eq '10.0.0.2') { return $false }
+            throw 'No route to host'
+        }
+
+        $result = $topo | Test-DeviceReachability -ProbeScript $probe -WarningAction SilentlyContinue
+        ($result.Nodes | Where-Object IP -eq '10.0.0.1').Reachable | Should -Be $true
+        ($result.Nodes | Where-Object IP -eq '10.0.0.2').Reachable | Should -Be $false
+        ($result.Nodes | Where-Object IP -eq '10.0.0.3').Reachable | Should -Be $null
     }
 
     It 'Should handle empty topology gracefully' {

@@ -225,6 +225,8 @@ function Test-DeviceReachability {
         Maximum number of parallel ping tests (default: 32)
     .PARAMETER TimeoutSeconds
         Timeout for each ping test (default: 1)
+    .PARAMETER TcpFallbackPort
+        If ICMP fails, try TCP connect to this port to promote an ICMP-silent host to reachable
     .EXAMPLE
         $topo = Import-Inventory -Path '.\my-inventory.json' | Test-DeviceReachability -MaxParallel 64
     #>
@@ -237,7 +239,14 @@ function Test-DeviceReachability {
         [int]$MaxParallel = 32,
 
         [Parameter()]
-        [int]$TimeoutSeconds = 1
+        [int]$TimeoutSeconds = 1,
+
+        [Parameter()]
+        [ValidateRange(1, 65535)]
+        [int]$TcpFallbackPort,
+
+        [Parameter(DontShow)]
+        [scriptblock]$ProbeScript
     )
 
     process {
@@ -252,33 +261,70 @@ function Test-DeviceReachability {
 
         Write-Verbose "Testing reachability for $($Topology.Nodes.Count) nodes with $MaxParallel parallel threads"
 
-        # Create a synchronized hashtable for results
-        $results = [System.Collections.Concurrent.ConcurrentDictionary[string,bool]]::new()
+        # Create a synchronized hashtable for results (tri-state: $true/$false/$null)
+        $results = [System.Collections.Concurrent.ConcurrentDictionary[string,object]]::new()
+        $tcpPort = $TcpFallbackPort
+        $probe = $ProbeScript
 
-        # Test reachability in parallel
-        $Topology.Nodes | ForEach-Object -Parallel {
-            $node = $_
-            $timeout = $using:TimeoutSeconds
-            $resultsDict = $using:results
+        if ($probe) {
+            # Test seam: ProbeScript returns $true/$false/$null directly per IP
+            foreach ($node in $Topology.Nodes) {
+                try {
+                    $r = & $probe $node.IP
+                    $null = $results.TryAdd($node.IP, $r)
+                }
+                catch { $null = $results.TryAdd($node.IP, $null) }
+            }
+        }
+        else {
+            # Test reachability in parallel
+            $Topology.Nodes | ForEach-Object -Parallel {
+                $node = $_
+                $timeout = $using:TimeoutSeconds
+                $resultsDict = $using:results
+                $fallbackPort = $using:tcpPort
 
-            try {
-                $pingResult = Test-Connection -ComputerName $node.IP -Count 1 -TimeoutSeconds $timeout -ErrorAction SilentlyContinue -Quiet
-                $null = $resultsDict.TryAdd($node.IP, $pingResult)
-            }
-            catch {
-                $null = $resultsDict.TryAdd($node.IP, $false)
-            }
-        } -ThrottleLimit $MaxParallel
+                try {
+                    $pingResult = Test-Connection -ComputerName $node.IP -Count 1 -TimeoutSeconds $timeout -ErrorAction Stop -Quiet
+                    if ($pingResult -eq $true) {
+                        $null = $resultsDict.TryAdd($node.IP, $true)
+                        continue
+                    }
+                    if ($fallbackPort) {
+                        try {
+                            $tcp = [System.Net.Sockets.TcpClient]::new()
+                            $task = $tcp.ConnectAsync($node.IP, $fallbackPort)
+                            if ($task.Wait([TimeSpan]::FromSeconds($timeout))) {
+                                $ok = $task.IsCompletedSuccessfully -and $tcp.Connected
+                                $tcp.Dispose()
+                                if ($ok) { $null = $resultsDict.TryAdd($node.IP, $true); continue }
+                            } else { $tcp.Dispose() }
+                        } catch {}
+                    }
+                    $null = $resultsDict.TryAdd($node.IP, $false)
+                }
+                catch {
+                    $null = $resultsDict.TryAdd($node.IP, $null)
+                }
+            } -ThrottleLimit $MaxParallel
+        }
 
         # Update nodes with results
+        $indeterminateCount = 0
         foreach ($node in $Topology.Nodes) {
-            $reachable = $false
-            if ($results.TryGetValue($node.IP, [ref]$reachable)) {
-                $node.Reachable = $reachable
+            $val = $null
+            $found = $results.TryGetValue($node.IP, [ref]$val)
+            if ($found) {
+                if ($null -eq $val) { $indeterminateCount++ }
+                $node.Reachable = $val
             }
             else {
-                $node.Reachable = $false
+                $node.Reachable = $null
+                $indeterminateCount++
             }
+        }
+        if ($indeterminateCount -gt 0) {
+            Write-Warning "Reachability indeterminate for $indeterminateCount node(s): local probe could not be sent (no route or insufficient privilege) — not marked as unreachable."
         }
 
         $reachableCount = @($Topology.Nodes | Where-Object { $_.Reachable -eq $true }).Count

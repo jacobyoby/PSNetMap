@@ -44,6 +44,55 @@ function New-EmptyTopology {
     }
 }
 
+function ConvertTo-NormalizedIPv4Address {
+    param(
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][string]$Context
+    )
+
+    $address = $null
+    if (-not [System.Net.IPAddress]::TryParse($Value, [ref]$address) -or
+        $address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+        throw "Invalid inventory $Context '$Value': expected an IPv4 address. IPv6 is not supported."
+    }
+    return $address.ToString()
+}
+
+function ConvertTo-NormalizedIPv4Cidr {
+    param(
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][string]$Context
+    )
+
+    if ($Value -notmatch '^(.+)\/(\d{1,2})$') {
+        throw "Invalid inventory $Context '$Value': expected IPv4 CIDR notation."
+    }
+
+    $address = ConvertTo-NormalizedIPv4Address -Value $matches[1] -Context $Context
+    $prefixLength = [int]$matches[2]
+    if ($prefixLength -gt 32) {
+        throw "Invalid inventory $Context '$Value': IPv4 prefix must be between 0 and 32."
+    }
+
+    $bytes = ([System.Net.IPAddress]::Parse($address)).GetAddressBytes()
+    $bitsRemaining = $prefixLength
+    for ($index = 0; $index -lt $bytes.Count; $index++) {
+        $mask = if ($bitsRemaining -ge 8) {
+            255
+        }
+        elseif ($bitsRemaining -le 0) {
+            0
+        }
+        else {
+            256 - [Math]::Pow(2, 8 - $bitsRemaining)
+        }
+        $bytes[$index] = [byte]($bytes[$index] -band [int]$mask)
+        $bitsRemaining -= 8
+    }
+
+    return "$([System.Net.IPAddress]::new($bytes))/$prefixLength"
+}
+
 #endregion
 
 #region Import-Inventory
@@ -54,7 +103,10 @@ function Import-Inventory {
         Imports network inventory from JSON file
     .DESCRIPTION
         Reads a JSON inventory file and creates a Topology object with Nodes and Subnets.
-        Nodes are enriched with Layer information based on their role.
+        The stable inventory contract is IPv4-only. Device addresses and subnet CIDRs
+        are validated and normalized; subnet host bits are cleared. Duplicate device
+        addresses are rejected. Unknown or omitted roles are retained and placed in the
+        Access layer.
     .PARAMETER Path
         Path to the inventory JSON file
     .EXAMPLE
@@ -81,45 +133,71 @@ function Import-Inventory {
         if (-not $inventory.PSObject.Properties['knownDevices']) {
             throw "Invalid inventory: missing 'knownDevices' property"
         }
+        if ($null -eq $inventory.knownDevices -or
+            $inventory.knownDevices -is [string] -or
+            $inventory.knownDevices -isnot [System.Collections.IEnumerable]) {
+            throw "Invalid inventory: 'knownDevices' must be an array"
+        }
+        if ($inventory.PSObject.Properties['subnets'] -and
+            ($null -eq $inventory.subnets -or $inventory.subnets -is [string] -or
+             $inventory.subnets -isnot [System.Collections.IEnumerable])) {
+            throw "Invalid inventory: 'subnets' must be an array when present"
+        }
 
         $topology = New-EmptyTopology
+        $deviceAddresses = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 
         # Process known devices
-        $nodes = foreach ($device in $inventory.knownDevices) {
-            if ([string]::IsNullOrWhiteSpace($device.ip)) {
-                Write-Warning "Skipping device without IP address"
-                continue
+        $deviceIndex = 0
+        $nodes = foreach ($device in @($inventory.knownDevices)) {
+            if ($null -eq $device -or -not $device.PSObject.Properties['ip'] -or
+                $device.ip -isnot [string] -or [string]::IsNullOrWhiteSpace($device.ip)) {
+                throw "Invalid inventory knownDevices[$deviceIndex]: missing string 'ip'"
+            }
+
+            $normalizedIP = ConvertTo-NormalizedIPv4Address -Value $device.ip -Context "knownDevices[$deviceIndex].ip"
+            if (-not $deviceAddresses.Add($normalizedIP)) {
+                throw "Invalid inventory knownDevices[$deviceIndex].ip '$normalizedIP': duplicate device address"
             }
 
             $role = if ($device.PSObject.Properties['role']) { $device.role } else { 'unknown' }
             $layer = Get-LayerFromRole -Role $role
 
             [pscustomobject]@{
-                IP        = $device.ip
-                Hostname  = if ($device.PSObject.Properties['hostname']) { $device.hostname } else { $device.ip }
+                IP        = $normalizedIP
+                Hostname  = if ($device.PSObject.Properties['hostname'] -and -not [string]::IsNullOrWhiteSpace($device.hostname)) { $device.hostname } else { $normalizedIP }
                 Role      = $role
                 Vendor    = if ($device.PSObject.Properties['vendor']) { $device.vendor } else { 'Unknown' }
                 OS        = if ($device.PSObject.Properties['os']) { $device.os } else { 'Unknown' }
                 Layer     = $layer
                 Reachable = $null
             }
+            $deviceIndex++
         }
 
         $topology.Nodes = @($nodes)
 
         # Process subnets if present
         if ($inventory.PSObject.Properties['subnets'] -and $inventory.subnets) {
-            $subnets = foreach ($subnet in $inventory.subnets) {
-                if ([string]::IsNullOrWhiteSpace($subnet.cidr)) {
-                    Write-Warning "Skipping subnet without CIDR"
-                    continue
+            $subnetIndex = 0
+            $subnetCidrs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            $subnets = foreach ($subnet in @($inventory.subnets)) {
+                if ($null -eq $subnet -or -not $subnet.PSObject.Properties['cidr'] -or
+                    $subnet.cidr -isnot [string] -or [string]::IsNullOrWhiteSpace($subnet.cidr)) {
+                    throw "Invalid inventory subnets[$subnetIndex]: missing string 'cidr'"
+                }
+
+                $normalizedCidr = ConvertTo-NormalizedIPv4Cidr -Value $subnet.cidr -Context "subnets[$subnetIndex].cidr"
+                if (-not $subnetCidrs.Add($normalizedCidr)) {
+                    throw "Invalid inventory subnets[$subnetIndex].cidr '$normalizedCidr': duplicate subnet"
                 }
 
                 [pscustomobject]@{
-                    CIDR  = $subnet.cidr
-                    Label = if ($subnet.PSObject.Properties['label']) { $subnet.label } else { $subnet.cidr }
+                    CIDR  = $normalizedCidr
+                    Label = if ($subnet.PSObject.Properties['label'] -and -not [string]::IsNullOrWhiteSpace($subnet.label)) { $subnet.label } else { $normalizedCidr }
                     VLAN  = if ($subnet.PSObject.Properties['vlan']) { $subnet.vlan } else { $null }
                 }
+                $subnetIndex++
             }
             $topology.Subnets = @($subnets)
         }

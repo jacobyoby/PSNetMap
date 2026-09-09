@@ -91,6 +91,61 @@ Describe 'Import-Inventory' {
     It 'Should throw error for missing file' {
         { Import-Inventory -Path 'C:\NonExistent\file.json' } | Should -Throw
     }
+
+    It 'Accepts a valid empty inventory' {
+        $path = Join-Path $TestDrive 'empty-inventory.json'
+        '{"knownDevices":[],"subnets":[]}' | Set-Content -Path $path
+
+        $topology = Import-Inventory -Path $path
+        $topology.Nodes | Should -HaveCount 0
+        $topology.Subnets | Should -HaveCount 0
+    }
+
+    It 'Rejects a non-array knownDevices shape' {
+        $path = Join-Path $TestDrive 'bad-device-shape.json'
+        '{"knownDevices":{"ip":"192.168.1.2"}}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw "*'knownDevices' must be an array*"
+    }
+
+    It 'Rejects an invalid IPv4 octet and identifies its entry' {
+        $path = Join-Path $TestDrive 'bad-ip.json'
+        '{"knownDevices":[{"ip":"192.168.999.2"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*knownDevices*0*ip*'
+    }
+
+    It 'Rejects IPv6 explicitly' {
+        $path = Join-Path $TestDrive 'ipv6.json'
+        '{"knownDevices":[{"ip":"2001:db8::1"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*IPv6 is not supported*'
+    }
+
+    It 'Rejects duplicate normalized device addresses' {
+        $path = Join-Path $TestDrive 'duplicate-ip.json'
+        '{"knownDevices":[{"ip":"192.168.1.2"},{"ip":"192.168.1.2"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*duplicate device address*'
+    }
+
+    It 'Rejects an invalid subnet prefix and identifies its entry' {
+        $path = Join-Path $TestDrive 'bad-prefix.json'
+        '{"knownDevices":[],"subnets":[{"cidr":"192.168.1.0/33"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*subnets*0*cidr*'
+    }
+
+    It 'Normalizes subnet host bits and maps an unknown role to Access' {
+        $path = Join-Path $TestDrive 'normalized.json'
+        '{"knownDevices":[{"ip":"192.168.1.42","role":"printer"}],"subnets":[{"cidr":"192.168.1.42/24"}]}' | Set-Content -Path $path
+
+        $topology = Import-Inventory -Path $path
+        $topology.Nodes[0].IP | Should -Be '192.168.1.42'
+        $topology.Nodes[0].Role | Should -Be 'printer'
+        $topology.Nodes[0].Layer | Should -Be 'Access'
+        $topology.Subnets[0].CIDR | Should -Be '192.168.1.0/24'
+    }
 }
 
 Describe 'Test-DeviceReachability' {

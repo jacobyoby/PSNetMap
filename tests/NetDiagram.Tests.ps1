@@ -456,6 +456,117 @@ Describe 'Defensive Coding Tests' {
     }
 }
 
+Describe 'Get-LocalARPTable parsing (#13 regression)' {
+    It 'Parses macOS arp output and filters by interface' {
+        InModuleScope 'NetDiagram-PS' {
+            $lines = @(
+                '? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]'
+                '? (192.168.1.2) at 11:22:33:44:55:66 on bridge0 ifscope [ethernet]'
+                '? (192.168.1.3) at (incomplete) on en0 ifscope [ethernet]'
+            )
+
+            $result = @(ConvertFrom-ArpText -Lines $lines -Format MacOS -InterfaceAlias 'en0')
+            $result | Should -HaveCount 1
+            $result[0].IPAddress | Should -Be '192.168.1.1'
+            $result[0].MACAddress | Should -Be 'AA:BB:CC:DD:EE:FF'
+            $result[0].InterfaceAlias | Should -Be 'en0'
+        }
+    }
+
+    It 'Parses Linux ip-neigh output including dotted interface names' {
+        InModuleScope 'NetDiagram-PS' {
+            $lines = @(
+                '192.168.1.1 dev eth0.20 lladdr aa:bb:cc:dd:ee:ff REACHABLE'
+                '192.168.1.2 dev eth0 lladdr 11:22:33:44:55:66 STALE'
+                '192.168.1.3 dev eth0 FAILED'
+            )
+
+            $result = @(ConvertFrom-ArpText -Lines $lines -Format LinuxIp -InterfaceAlias 'eth0.20')
+            $result | Should -HaveCount 1
+            $result[0].IPAddress | Should -Be '192.168.1.1'
+            $result[0].State | Should -Be 'REACHABLE'
+            $result[0].InterfaceAlias | Should -Be 'eth0.20'
+        }
+    }
+
+    It 'Parses Linux arp fallback output' {
+        InModuleScope 'NetDiagram-PS' {
+            $lines = @('? (10.0.0.1) at de:ad:be:ef:00:01 [ether] on eth0')
+            $result = @(ConvertFrom-ArpText -Lines $lines -Format LinuxArp)
+
+            $result | Should -HaveCount 1
+            $result[0].IPAddress | Should -Be '10.0.0.1'
+            $result[0].MACAddress | Should -Be 'DE:AD:BE:EF:00:01'
+        }
+    }
+
+    It 'Surfaces a candidate line that no longer matches the expected format' {
+        InModuleScope 'NetDiagram-PS' {
+            { ConvertFrom-ArpText -Lines @('192.168.1.1 dev eth0 lladdr malformed REACHABLE') -Format LinuxIp } |
+                Should -Throw '*Unable to parse Linux ip-neigh entry*'
+        }
+    }
+}
+
+Describe 'Invoke-PortScan loopback behavior (#13 regression)' {
+    It 'Reports an open port, omits a closed port, and captures a banner' {
+        $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $portProbe.Start()
+        $openPort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
+        $portProbe.Stop()
+
+        do {
+            $closedProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $closedProbe.Start()
+            $closedPort = ([System.Net.IPEndPoint]$closedProbe.LocalEndpoint).Port
+            $closedProbe.Stop()
+        } while ($closedPort -eq $openPort)
+
+        $serverJob = Start-ThreadJob -ArgumentList $openPort -ScriptBlock {
+            param($Port)
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+            try {
+                $listener.Start()
+                'READY'
+                $client = $listener.AcceptTcpClient()
+                try {
+                    $stream = $client.GetStream()
+                    $bytes = [System.Text.Encoding]::ASCII.GetBytes('PSNETMAP-TEST')
+                    $stream.Write($bytes, 0, $bytes.Length)
+                    $stream.Flush()
+                }
+                finally {
+                    $client.Dispose()
+                }
+            }
+            finally {
+                $listener.Stop()
+            }
+        }
+
+        try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            do {
+                $ready = @(Receive-Job -Job $serverJob -Keep) -contains 'READY'
+                if (-not $ready) { Start-Sleep -Milliseconds 25 }
+            } while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
+            $ready | Should -Be $true
+
+            $result = Invoke-PortScan -IPAddress '127.0.0.1' `
+                -Ports @($openPort, $closedPort) -TimeoutMs 1000 -GrabBanners
+
+            $result.OpenPorts.Port | Should -Contain $openPort
+            $result.OpenPorts.Port | Should -Not -Contain $closedPort
+            ($result.OpenPorts | Where-Object Port -eq $openPort).Banner |
+                Should -Be 'PSNETMAP-TEST'
+        }
+        finally {
+            Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
+            Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe 'Get-MACVendor' {
     It 'Should resolve a known OUI to its vendor' {
         $result = Get-MACVendor -MACAddress '00:1A:A0:12:34:56'

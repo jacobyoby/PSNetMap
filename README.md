@@ -83,6 +83,9 @@ pwsh .\examples\New-NetworkDiagram.ps1 -ScanDepth Full -OutputPath .\office-netw
 
 # Choose an interface explicitly (useful with VPNs or multiple adapters)
 pwsh .\examples\New-NetworkDiagram.ps1 -InterfaceName en0
+
+# Limit each reverse DNS lookup to one second
+pwsh .\examples\New-NetworkDiagram.ps1 -DnsTimeoutSeconds 1
 ```
 
 ### Method 2: Manual Workflow (manual inventory)

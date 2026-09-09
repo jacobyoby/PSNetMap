@@ -1522,7 +1522,16 @@ function Compare-NetworkScans {
     $currNodeIPs = @($currTopoData.Nodes | ForEach-Object { $_.IP })
 
     $addedNodes = @($currNodeIPs | Where-Object { $_ -notin $baseNodeIPs })
-    $removedNodes = @($baseNodeIPs | Where-Object { $_ -notin $currNodeIPs })
+    $rawRemoved = @($baseNodeIPs | Where-Object { $_ -notin $currNodeIPs })
+    # If current topology carries SnmpOutcomes, don't report a node as removed when the current scan merely failed to query it
+    $removedNodes = @($rawRemoved | Where-Object {
+        $ip = $_
+        if ($currTopoData.PSObject.Properties['SnmpOutcomes'] -and $currTopoData.SnmpOutcomes -and $currTopoData.SnmpOutcomes.PSObject.Properties[$ip]) {
+            $outcome = $currTopoData.SnmpOutcomes.$ip
+            $outcome -eq 'answered' -or $outcome -eq 'noData'
+        } else { $true }
+    })
+    $skippedDueToIncompleteQuery = @($rawRemoved | Where-Object { $_ -notin $removedNodes })
 
     $null = $report.AppendLine("## Node Changes")
     $null = $report.AppendLine()
@@ -1541,6 +1550,16 @@ function Compare-NetworkScans {
         foreach ($ip in $removedNodes) {
             $node = $baseTopoData.Nodes | Where-Object { $_.IP -eq $ip }
             $null = $report.AppendLine("- $ip ($($node.Hostname)) - $($node.Role)")
+        }
+        $null = $report.AppendLine()
+    }
+
+    if ($skippedDueToIncompleteQuery.Count -gt 0) {
+        $null = $report.AppendLine("### Skipped (incomplete SNMP query, not counted as removed) ($($skippedDueToIncompleteQuery.Count))")
+        foreach ($ip in $skippedDueToIncompleteQuery) {
+            $node = $baseTopoData.Nodes | Where-Object { $_.IP -eq $ip }
+            $outcome = $currTopoData.SnmpOutcomes.$ip
+            $null = $report.AppendLine("- $ip ($($node.Hostname)) - outcome: $outcome")
         }
         $null = $report.AppendLine()
     }

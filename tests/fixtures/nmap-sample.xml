@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" args="nmap -oX scan.xml 192.168.1.0/24">
+<host><status state="up"/><address addr="192.168.1.10" addrtype="ipv4"/><address addr="AA:BB:CC:DD:EE:FF" addrtype="mac" vendor="TestVendor"/><hostnames><hostname name="host10.example.com" type="PTR"/></hostnames><os><osmatch name="Linux 5.x" accuracy="98"/></os><ports><port protocol="tcp" portid="80"><state state="open"/></port><port protocol="tcp" portid="443"><state state="closed"/></port></ports></host>
+<host><status state="down"/><address addr="192.168.1.99" addrtype="ipv4"/><hostnames><hostname name="down.example.com"/></hostnames></host>
+<host><status state="up"/><address addr="192.168.1.20" addrtype="ipv4"/><hostnames/><ports><port protocol="tcp" portid="22"><state state="open"/></port></ports></host>
+</nmaprun>

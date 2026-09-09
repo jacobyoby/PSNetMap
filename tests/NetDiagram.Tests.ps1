@@ -58,6 +58,7 @@ Describe 'Module Import' {
         $commandNames | Should -Contain 'Export-Topology'
         $commandNames | Should -Contain 'Import-Topology'
         $commandNames | Should -Contain 'Export-NodeInventoryCsv'
+        $commandNames | Should -Contain 'Import-NmapScan'
         $commandNames | Should -Contain 'Compare-NetworkScans'
     }
 }
@@ -438,6 +439,28 @@ Describe 'Round-trip Test' {
         $xml = [xml]$content
         $xml.mxfile | Should -Not -BeNullOrEmpty
         $xml.mxfile.diagram | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Import-NmapScan (#36 regression)' {
+    It 'Parses fixture, drops down host, maps vendor/hostname, and pipes to DrawIO' {
+        $fixture = Join-Path $PSScriptRoot 'fixtures' 'nmap-sample.xml'
+        $topo = Import-NmapScan -Path $fixture
+        $topo.Nodes.Count | Should -Be 2
+        ($topo.Nodes | Where-Object IP -eq '192.168.1.99') | Should -BeNullOrEmpty
+        ($topo.Nodes | Where-Object IP -eq '192.168.1.10').Hostname | Should -Be 'host10.example.com'
+        ($topo.Nodes | Where-Object IP -eq '192.168.1.10').Vendor | Should -Be 'TestVendor'
+        ($topo.Nodes | Where-Object IP -eq '192.168.1.10').OpenPorts | Should -Contain '80'
+        $drawio = Join-Path $script:TestDataPath 'nmap.drawio'
+        $topo | Export-DrawIO -OutFile $drawio -Force
+        Test-Path $drawio | Should -Be $true
+    }
+
+    It 'Throws naming the file on malformed XML' {
+        $bad = Join-Path $script:TestDataPath 'bad.xml'
+        '<not-nmap/>' | Out-File -FilePath $bad -Force
+        { Import-NmapScan -Path $bad } | Should -Throw "*$bad*"
+        { Import-NmapScan -Path $bad } | Should -Throw "*nmaprun*"
     }
 }
 

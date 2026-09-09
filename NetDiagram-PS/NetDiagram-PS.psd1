@@ -12,6 +12,7 @@
     FunctionsToExport = @(
         # Core inventory and topology
         'Import-Inventory'
+        'Import-NmapScan'
         'Test-DeviceReachability'
         'Invoke-NetworkDiscovery'
         'Merge-Edges'

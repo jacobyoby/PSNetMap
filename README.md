@@ -23,7 +23,7 @@ pwsh .\examples\New-NetworkDiagram.ps1
 The wizard performs the following actions:
 - Discovers the network configuration
 - Scans for active devices
-- Tests connectivity
+- Tests connectivity with `Test-DeviceReachability` (reachable / unreachable / unknown)
 - Generates a draw.io diagram
 - Saves an inventory file for later refinement
 
@@ -88,6 +88,9 @@ pwsh .\examples\New-NetworkDiagram.ps1 -InterfaceName en0
 
 # Limit each reverse DNS lookup to one second
 pwsh .\examples\New-NetworkDiagram.ps1 -DnsTimeoutSeconds 1
+
+# ICMP-silent gateway: fall back to a TCP connect on port 443
+pwsh .\examples\New-NetworkDiagram.ps1 -TcpFallbackPort 443
 ```
 
 ### Method 2: Manual Workflow (manual inventory)

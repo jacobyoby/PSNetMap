@@ -1664,6 +1664,63 @@ Describe 'Quick-start wizard output paths' {
     }
 }
 
+Describe 'Quick-start wizard reachability (#64)' {
+    BeforeAll {
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
+    }
+
+    It 'Maps a local send failure to $null instead of $false' {
+        $nodes = @(
+            [pscustomobject]@{ IP = '10.0.0.1'; Hostname = 'this-host'; Role = 'workstation'; Reachable = $true }
+            [pscustomobject]@{ IP = '10.0.0.2'; Hostname = 'gw'; Role = 'router'; Reachable = $null }
+            [pscustomobject]@{ IP = '10.0.0.3'; Hostname = 'dns'; Role = 'server'; Reachable = $null }
+        )
+        $probe = {
+            param($IP)
+            if ($IP -eq '10.0.0.2') { return $false }
+            throw 'No route to host'
+        }
+
+        $result = Update-WizardNodeReachability -Nodes $nodes -ProbeScript $probe -WarningAction SilentlyContinue
+
+        ($result | Where-Object IP -eq '10.0.0.1').Reachable | Should -Be $true
+        ($result | Where-Object IP -eq '10.0.0.2').Reachable | Should -Be $false
+        ($result | Where-Object IP -eq '10.0.0.3').Reachable | Should -Be $null
+    }
+
+    It 'Summarizes reachable, unreachable, and unknown counts separately' {
+        $nodes = @(
+            [pscustomobject]@{ IP = '10.0.0.1'; Reachable = $true }
+            [pscustomobject]@{ IP = '10.0.0.2'; Reachable = $false }
+            [pscustomobject]@{ IP = '10.0.0.3'; Reachable = $null }
+            [pscustomobject]@{ IP = '10.0.0.4'; Reachable = $true }
+        )
+
+        $summary = Get-WizardReachabilitySummary -Nodes $nodes
+        $summary.Reachable | Should -Be 2
+        $summary.Unreachable | Should -Be 1
+        $summary.Unknown | Should -Be 1
+        $summary.Total | Should -Be 4
+    }
+
+    It 'Discovery helper returns only confirmed-reachable hosts' {
+        $probe = {
+            param($IP)
+            if ($IP -eq '192.168.1.10') { return $true }
+            if ($IP -eq '192.168.1.11') { return $false }
+            throw 'Network is unreachable'
+        }
+
+        $found = @(Find-WizardReachableScanHosts -ScanTargets @('192.168.1.1', '192.168.1.10', '192.168.1.11', '192.168.1.12') `
+            -SkipIPs @('192.168.1.1') -ProbeScript $probe -WarningAction SilentlyContinue)
+
+        $found | Should -HaveCount 1
+        $found[0].IP | Should -Be '192.168.1.10'
+        $found[0].Reachable | Should -Be $true
+    }
+}
+
 Describe 'Quick-start wizard interface selection (#15 regression)' {
     BeforeAll {
         $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'

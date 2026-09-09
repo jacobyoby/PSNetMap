@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `actions/checkout@v7`, and asserts offline dual-stack DrawIO parenting.
 
 ### Fixed
+- **`Invoke-SnmpWalk` accepts IPv6 `TargetIP`.** Validation was IPv4/FQDN-only,
+  so dual-stack SNMP targets failed before the walk. IPv4 and IPv6 literals
+  are parsed with `[System.Net.IPAddress]::TryParse`; hostnames stay accepted.
+  Garbage input still fails with a clear validation error.
 - **`Export-NetBox` IPv6 and unknown reachability.** IPv6 identity addresses
   go in `primary_ip6` (v6-only leaves `primary_ip4` empty). `Reachable=$null`
   no longer maps to `offline`; status is left empty (NetBox has no unknown).

@@ -16,7 +16,7 @@ function Invoke-SnmpWalk {
         not redacted. Treat SNMP v1/v2c community strings as low-secrecy and prefer SNMPv3
         with authentication for anything sensitive.
     .PARAMETER TargetIP
-        IP address or hostname (FQDN) to query. Must not begin with '-'.
+        IPv4 address, IPv6 address, or hostname (FQDN) to query. Must not begin with '-'.
     .PARAMETER Community
         SNMP community string. Must not begin with '-' (argument-injection guard).
     .PARAMETER OID
@@ -27,14 +27,18 @@ function Invoke-SnmpWalk {
         Timeout in seconds (default: 2)
     .EXAMPLE
         Invoke-SnmpWalk -TargetIP '10.66.1.1' -Community 'public'
+    .EXAMPLE
+        Invoke-SnmpWalk -TargetIP '2001:db8::1' -Community 'public'
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [ValidateScript({
             if ($_ -match '^-') { throw "TargetIP must not begin with '-'." }
-            if ($_ -notmatch '^(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*)$') {
-                throw "TargetIP '$_' is not a valid IPv4 address or hostname."
+            $parsed = $null
+            if (-not [System.Net.IPAddress]::TryParse($_, [ref]$parsed) -and
+                $_ -notmatch '^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*$') {
+                throw "TargetIP '$_' is not a valid IP address or hostname."
             }
             $true
         })]

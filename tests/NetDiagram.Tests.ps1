@@ -1419,6 +1419,23 @@ Describe 'Invoke-SnmpWalk parameter validation' {
         { Invoke-SnmpWalk -TargetIP 'switch01.example.com' -Community 'public' } |
             Should -Throw -ExpectedMessage '*snmpwalk not found*'
     }
+
+    It 'Accepts an IPv6 TargetIP without contacting SNMP' {
+        Mock Get-Command { $null } -ModuleName 'NetDiagram-PS' -ParameterFilter { $Name -like 'snmpwalk*' }
+        { Invoke-SnmpWalk -TargetIP '2001:db8::1' -Community 'public' } |
+            Should -Throw -ExpectedMessage '*snmpwalk not found*'
+    }
+
+    It 'Accepts an IPv4 TargetIP without contacting SNMP' {
+        Mock Get-Command { $null } -ModuleName 'NetDiagram-PS' -ParameterFilter { $Name -like 'snmpwalk*' }
+        { Invoke-SnmpWalk -TargetIP '192.0.2.1' -Community 'public' } |
+            Should -Throw -ExpectedMessage '*snmpwalk not found*'
+    }
+
+    It 'Rejects a garbage TargetIP with a clear validation error' {
+        { Invoke-SnmpWalk -TargetIP 'not a valid::address!' -Community 'public' } |
+            Should -Throw -ExpectedMessage '*not a valid IP address or hostname*'
+    }
 }
 
 Describe 'Invoke-PortScan parameter validation' {

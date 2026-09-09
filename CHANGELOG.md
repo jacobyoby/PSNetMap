@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`Import-NmapScan` imports IPv6 hosts.** nmap `-oX` `address` elements with
+  `addrtype='ipv6'` are accepted when a host has no IPv4 address. Dual-stack
+  hosts keep a single node identity: IPv4 is preferred when both families are
+  present. Addresses are parsed with `[System.Net.IPAddress]::Parse` and stored
+  in canonical form; malformed addresses are skipped (same as invalid IPv4).
+
 ### Changed
 - **`Import-Inventory` accepts dual-stack addresses.** Device `ip` and subnet
   `cidr` values may be IPv4 or IPv6. Both families are normalized (canonical

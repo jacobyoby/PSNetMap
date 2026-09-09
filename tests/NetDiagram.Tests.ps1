@@ -621,6 +621,33 @@ Describe 'Import-NmapScan (#36 regression)' {
         { Import-NmapScan -Path $bad } | Should -Throw "*$bad*"
         { Import-NmapScan -Path $bad } | Should -Throw "*nmaprun*"
     }
+
+    It 'Imports an IPv6-only up host and prefers IPv4 on dual-stack hosts (#63)' {
+        $fixture = Join-Path $PSScriptRoot 'fixtures' 'nmap-sample-ipv6.xml'
+        $topo = Import-NmapScan -Path $fixture
+        $topo.Nodes.Count | Should -Be 2
+
+        $v6Only = $topo.Nodes | Where-Object IP -eq '2001:db8::10'
+        $v6Only | Should -Not -BeNullOrEmpty
+        $v6Only.Hostname | Should -Be 'v6only.example.com'
+        $v6Only.Vendor | Should -Be 'V6Vendor'
+        $v6Only.OpenPorts | Should -Contain '22'
+
+        $dual = $topo.Nodes | Where-Object IP -eq '192.168.1.30'
+        $dual | Should -Not -BeNullOrEmpty
+        $dual.Hostname | Should -Be 'dual.example.com'
+        ($topo.Nodes | Where-Object IP -eq '2001:db8::30') | Should -BeNullOrEmpty
+
+        ($topo.Nodes | Where-Object IP -eq '2001:db8::99') | Should -BeNullOrEmpty
+        ($topo.Nodes | Where-Object IP -eq 'not-an-ip') | Should -BeNullOrEmpty
+    }
+
+    It 'Help DESCRIPTION mentions IPv4 and IPv6 address elements' {
+        $help = Get-Help Import-NmapScan
+        $text = @($help.Description | ForEach-Object { $_.Text }) -join ' '
+        $text | Should -Match 'IPv4'
+        $text | Should -Match 'IPv6'
+    }
 }
 
 Describe 'Topology persistence (#34 regression)' {

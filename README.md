@@ -194,7 +194,8 @@ becomes `192.168.1.0/24` and `2001:db8::1/32` becomes `2001:db8::/32`).
 Uniqueness is the normalized address string, so compressed and expanded IPv6
 forms that parse to the same address are duplicates. A dual-stack host that
 must appear on both families is two rows; when only one identity is needed,
-prefer the IPv4 address. Mixed-family subnet placement does not match.
+prefer the IPv4 address. `Import-NmapScan` applies the same rule: IPv4 when
+both `addrtype` families are present on one nmap host, otherwise IPv6. Mixed-family subnet placement does not match.
 Unknown or omitted roles remain valid and are placed in the Access layer.
 
 See `examples/inventory-template.json` for a complete template.
@@ -306,7 +307,7 @@ After importing the module, you have access to:
 | `Export-Topology` / `Import-Topology` | Persist topology to JSON |
 | `Export-NodeInventoryCsv` | Export inventory CSV |
 | `Export-Metadata` | Save scan statistics |
-| `Import-NmapScan` | Import nmap XML |
+| `Import-NmapScan` | Import nmap XML (IPv4 preferred; IPv6-only hosts imported) |
 | `Invoke-NetworkDiscovery` | Scan a CIDR without repo clone |
 | `Compare-NetworkScans` | Diff two topology snapshots |
 | `Invoke-SnmpWalk` | Direct SNMP queries |

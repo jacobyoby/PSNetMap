@@ -770,6 +770,90 @@ Describe 'Export-DrawIO subnet container parenting (#9 regression)' {
     }
 }
 
+Describe 'Export-DrawIO dynamic container layout (#19 regression)' {
+    It 'Contains every node for a <Count>-node subnet' -TestCases @(
+        @{ Count = 0 }
+        @{ Count = 1 }
+        @{ Count = 16 }
+        @{ Count = 17 }
+        @{ Count = 50 }
+    ) {
+        param($Count)
+
+        $nodes = @(
+            for ($index = 1; $index -le $Count; $index++) {
+                [pscustomobject]@{
+                    IP = "10.0.0.$index"; Hostname = "node-$index"; Role = 'switch'
+                    Vendor = 'Test'; OS = 'Test'; Layer = 'Access'; Reachable = $null
+                }
+            }
+        )
+        $topology = [pscustomobject]@{
+            Nodes = $nodes
+            Edges = @()
+            Subnets = @([pscustomobject]@{ CIDR = '10.0.0.0/24'; Label = 'Test'; VLAN = 1 })
+        }
+        $drawioPath = Join-Path $script:TestDataPath "layout-$Count.drawio"
+
+        $topology | Export-DrawIO -OutFile $drawioPath
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $container = $xml.SelectSingleNode("//mxCell[contains(@style,'swimlane')]")
+        $containerHeight = [double]$container.mxGeometry.height
+        $nodeCells = @($xml.SelectNodes("//mxCell[@vertex='1' and not(contains(@style,'swimlane'))]"))
+
+        $nodeCells | Should -HaveCount $Count
+        foreach ($node in $nodeCells) {
+            $node.parent | Should -Be $container.id
+            ([double]$node.mxGeometry.y + [double]$node.mxGeometry.height) |
+                Should -BeLessOrEqual $containerHeight
+        }
+    }
+
+    It 'Keeps multiple variable-height containers and unmatched nodes separated' {
+        $nodes = @()
+        $subnets = @()
+        $counts = @(50, 1, 17, 16)
+        for ($subnetIndex = 0; $subnetIndex -lt $counts.Count; $subnetIndex++) {
+            $octet = $subnetIndex + 1
+            $subnets += [pscustomobject]@{ CIDR = "10.0.$octet.0/24"; Label = "Subnet $octet"; VLAN = $octet }
+            for ($hostIndex = 1; $hostIndex -le $counts[$subnetIndex]; $hostIndex++) {
+                $nodes += [pscustomobject]@{
+                    IP = "10.0.$octet.$hostIndex"; Hostname = "node-$octet-$hostIndex"; Role = 'switch'
+                    Vendor = 'Test'; OS = 'Test'; Layer = 'Access'; Reachable = $null
+                }
+            }
+        }
+        $nodes += [pscustomobject]@{
+            IP = '203.0.113.10'; Hostname = 'unmatched'; Role = 'server'
+            Vendor = 'Test'; OS = 'Test'; Layer = 'Servers'; Reachable = $null
+        }
+        $topology = [pscustomobject]@{ Nodes = $nodes; Edges = @(); Subnets = $subnets }
+        $drawioPath = Join-Path $script:TestDataPath 'layout-multiple.drawio'
+
+        $topology | Export-DrawIO -OutFile $drawioPath
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $containers = @($xml.SelectNodes("//mxCell[contains(@style,'swimlane')]"))
+
+        for ($left = 0; $left -lt $containers.Count; $left++) {
+            for ($right = $left + 1; $right -lt $containers.Count; $right++) {
+                $a = $containers[$left].mxGeometry
+                $b = $containers[$right].mxGeometry
+                $overlaps = ([double]$a.x -lt ([double]$b.x + [double]$b.width)) -and
+                    (([double]$a.x + [double]$a.width) -gt [double]$b.x) -and
+                    ([double]$a.y -lt ([double]$b.y + [double]$b.height)) -and
+                    (([double]$a.y + [double]$a.height) -gt [double]$b.y)
+                $overlaps | Should -Be $false
+            }
+        }
+
+        $containerBottom = ($containers | ForEach-Object {
+            [double]$_.mxGeometry.y + [double]$_.mxGeometry.height
+        } | Measure-Object -Maximum).Maximum
+        $unmatched = $xml.SelectSingleNode("//mxCell[@vertex='1' and contains(@value,'unmatched')]")
+        [double]$unmatched.mxGeometry.y | Should -BeGreaterThan $containerBottom
+    }
+}
+
 Describe 'Quick-start wizard CIDR math (#4 regression)' {
     BeforeAll {
         # Dot-source the example; the dot-source guard returns before the wizard body

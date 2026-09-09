@@ -924,19 +924,46 @@ function Export-DrawIO {
         $null = $xml.AppendLine('        <mxCell id="0"/>')
         $null = $xml.AppendLine('        <mxCell id="1" parent="0"/>')
 
-        # Add subnet containers (best practice: group by network segment)
+        # Assign each node to its first matching subnet before sizing containers.
+        $nodeSubnet = @{}
+        $subnetNodeCount = @{}
+        foreach ($subnet in $Topology.Subnets) {
+            $subnetNodeCount[$subnet.CIDR] = 0
+        }
+        foreach ($node in $uniqueNodes) {
+            foreach ($subnet in $Topology.Subnets) {
+                if (Test-IPInSubnet -IP $node.IP -CIDR $subnet.CIDR) {
+                    $nodeSubnet[$node.IP] = $subnet.CIDR
+                    $subnetNodeCount[$subnet.CIDR]++
+                    break
+                }
+            }
+        }
+
+        # Add subnet containers. Each row starts below the tallest container in the
+        # previous row, so dense subnets cannot overlap the row beneath them.
         $containerID = $nextID
         $subnetContainers = @{}
+        $containerIndex = 0
+        $containerRowY = 20
+        $containerRowHeight = 0
 
         foreach ($subnet in $Topology.Subnets) {
             $subnetLabel = [System.Security.SecurityElement]::Escape("$($subnet.Label)`n$($subnet.CIDR)")
             $containerStyle = 'swimlane;fontSize=14;fontStyle=1;fillColor=#f5f5f5;strokeColor=#666666;rounded=1;'
 
-            # Calculate container size based on nodes in subnet
+            $column = $containerIndex % 2
+            if ($column -eq 0 -and $containerIndex -gt 0) {
+                $containerRowY += $containerRowHeight + 50
+                $containerRowHeight = 0
+            }
+
+            $nodeRows = [Math]::Ceiling($subnetNodeCount[$subnet.CIDR] / 4.0)
             $containerWidth = 800
-            $containerHeight = 550
-            $containerX = 20 + (($subnetContainers.Count % 2) * 850)
-            $containerY = 20 + ([Math]::Floor($subnetContainers.Count / 2) * 600)
+            $containerHeight = [Math]::Max(140, 40 + ([int]$nodeRows * 110))
+            $containerX = 20 + ($column * 850)
+            $containerY = $containerRowY
+            $containerRowHeight = [Math]::Max($containerRowHeight, $containerHeight)
 
             $null = $xml.AppendLine("        <mxCell id=`"$containerID`" value=`"$subnetLabel`" style=`"$containerStyle`" parent=`"1`" vertex=`"1`">")
             $null = $xml.AppendLine("          <mxGeometry x=`"$containerX`" y=`"$containerY`" width=`"$containerWidth`" height=`"$containerHeight`" as=`"geometry`"/>")
@@ -944,27 +971,28 @@ function Export-DrawIO {
 
             $subnetContainers[$subnet.CIDR] = $containerID
             $containerID++
+            $containerIndex++
         }
 
         $nextID = $containerID
 
-        # Map each node to the first subnet container whose CIDR contains it, so nodes
-        # are parented/positioned inside the right swimlane instead of always parent="1".
+        # Map assigned subnet CIDRs to their emitted container IDs.
         $nodeContainer = @{}
         foreach ($node in $uniqueNodes) {
-            foreach ($subnet in $Topology.Subnets) {
-                if ($subnetContainers.ContainsKey($subnet.CIDR) -and (Test-IPInSubnet -IP $node.IP -CIDR $subnet.CIDR)) {
-                    $nodeContainer[$node.IP] = $subnetContainers[$subnet.CIDR]
-                    break
-                }
+            if ($nodeSubnet.ContainsKey($node.IP)) {
+                $nodeContainer[$node.IP] = $subnetContainers[$nodeSubnet[$node.IP]]
             }
         }
 
         # Layout bookkeeping: per-container child index, and a base Y for unmatched
         # (canvas-level) nodes placed below the container grid so nothing overlaps.
         $containerChildCount = @{}
-        $containerRows = [Math]::Ceiling($subnetContainers.Count / 2.0)
-        $unmatchedBaseY = 20 + ([int]$containerRows * 600) + 40
+        $unmatchedBaseY = if ($subnetContainers.Count -gt 0) {
+            $containerRowY + $containerRowHeight + 40
+        }
+        else {
+            20
+        }
 
         # Add nodes with enhanced styles and metadata
         foreach ($layer in $layerOrder) {

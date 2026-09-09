@@ -13,16 +13,23 @@ function Resolve-SnmpCredentialConfig {
             continue
         }
 
-        if ($entry.Name -notmatch '^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$') {
-            throw "Invalid SNMP credential-map CIDR '$($entry.Name)'. Expected an IPv4 CIDR or Default."
+        $cidrParts = $entry.Name -split '/', 2
+        $networkAddress = $null
+        $prefixLength = 0
+        $maxPrefix = -1
+        if ($cidrParts.Count -eq 2 -and
+            [int]::TryParse($cidrParts[1], [ref]$prefixLength) -and
+            [System.Net.IPAddress]::TryParse($cidrParts[0], [ref]$networkAddress)) {
+            if ($networkAddress.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                $maxPrefix = 32
+            }
+            elseif ($networkAddress.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+                $maxPrefix = 128
+            }
         }
 
-        $prefixLength = [int]$matches[2]
-        $networkAddress = $null
-        if ($prefixLength -gt 32 -or
-            -not [System.Net.IPAddress]::TryParse($matches[1], [ref]$networkAddress) -or
-            $networkAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
-            throw "Invalid SNMP credential-map CIDR '$($entry.Name)'. Expected an IPv4 CIDR or Default."
+        if ($maxPrefix -lt 0 -or $prefixLength -lt 0 -or $prefixLength -gt $maxPrefix) {
+            throw "Invalid SNMP credential-map CIDR '$($entry.Name)'. Expected an IPv4 or IPv6 CIDR or Default."
         }
 
         if (Test-IPInSubnet -IP $IPAddress -CIDR $entry.Name) {

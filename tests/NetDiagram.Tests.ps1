@@ -1256,6 +1256,65 @@ Describe 'SNMP credential-map precedence (#17 regression)' {
     }
 }
 
+Describe 'SNMP credential-map IPv6 CIDR keys (#74)' {
+    It 'Matches an IPv6 CIDR key' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"2001:db8::/32":{"communitySecret":"v6lab"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '2001:db8::1'
+
+            $match.CIDR | Should -Be '2001:db8::/32'
+            $match.Config.communitySecret | Should -Be 'v6lab'
+        }
+    }
+
+    It 'Chooses the longest matching IPv6 prefix' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"2001:db8::/32":{"communitySecret":"site"},"2001:db8:1::/48":{"communitySecret":"floor"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '2001:db8:1::10'
+
+            $match.CIDR | Should -Be '2001:db8:1::/48'
+            $match.Config.communitySecret | Should -Be 'floor'
+        }
+    }
+
+    It 'Keeps IPv4 longest-prefix matching unchanged on a mixed map' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"192.168.0.0/16":{"communitySecret":"v4site"},"192.168.1.0/24":{"communitySecret":"v4floor"},"2001:db8::/32":{"communitySecret":"v6lab"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be '192.168.1.0/24'
+            $match.Config.communitySecret | Should -Be 'v4floor'
+
+            $v6 = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '2001:db8::1'
+            $v6.CIDR | Should -Be '2001:db8::/32'
+            $v6.Config.communitySecret | Should -Be 'v6lab'
+        }
+    }
+
+    It 'Returns no credential for a wrong-family address (does not throw)' {
+        InModuleScope 'NetDiagram-PS' {
+            $v6only = '{"2001:db8::/32":{"communitySecret":"v6lab"}}' | ConvertFrom-Json
+            { Resolve-SnmpCredentialConfig -SnmpMap $v6only -IPAddress '192.168.1.40' } | Should -Not -Throw
+            $fromV6Map = Resolve-SnmpCredentialConfig -SnmpMap $v6only -IPAddress '192.168.1.40'
+            $fromV6Map | Should -BeNullOrEmpty
+
+            $v4only = '{"10.0.0.0/8":{"communitySecret":"internal"}}' | ConvertFrom-Json
+            { Resolve-SnmpCredentialConfig -SnmpMap $v4only -IPAddress '2001:db8::1' } | Should -Not -Throw
+            $fromV4Map = Resolve-SnmpCredentialConfig -SnmpMap $v4only -IPAddress '2001:db8::1'
+            $fromV4Map | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'Rejects an invalid IPv6 CIDR entry' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"2001:db8::/129":{"communitySecret":"bad"}}' | ConvertFrom-Json
+
+            { Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '2001:db8::1' } |
+                Should -Throw '*Invalid SNMP credential-map CIDR*'
+        }
+    }
+}
+
 Describe 'Get-SnmpNeighbors node eligibility' {
     BeforeEach {
         # Empty credential map is valid; -TryPublic supplies the community so no

@@ -9,8 +9,9 @@ scanmeta.json
 # Claude Code settings
 .claude/
 
-# Test files
-test-*.ps1
+# Test files (only in tests/ or repo root — not module source)
+/test-*.ps1
+tests/test-*.ps1
 
 # OS files
 .DS_Store

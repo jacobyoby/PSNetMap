@@ -1,7 +1,11 @@
 function Test-IPInSubnet {
     <#
     .SYNOPSIS
-        Simple CIDR matching helper
+        CIDR matching helper for both IPv4 and IPv6
+    .DESCRIPTION
+        Returns true when Address falls within the network defined by CIDR.
+        Mixed address families (v4 address against v6 CIDR or vice versa)
+        return false without throwing.
     #>
     param([string]$IP, [string]$CIDR)
 
@@ -9,16 +13,18 @@ function Test-IPInSubnet {
         return $false
     }
 
-    if ($CIDR -notmatch '^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$') {
+    # Split CIDR into network address and prefix length. Accept both IPv4 and
+    # IPv6 CIDR notation (e.g. '10.0.0.0/8' or '2001:db8::/32').
+    $cidrParts = $CIDR -split '/'
+    if ($cidrParts.Count -ne 2) {
         return $false
     }
 
-    $networkAddressString = $matches[1]
-    $prefixLength = [int]$matches[2]
-
-    if ($prefixLength -lt 0 -or $prefixLength -gt 32) {
+    $networkAddressString = $cidrParts[0]
+    if (-not [int]::TryParse($cidrParts[1], [ref]$null)) {
         return $false
     }
+    $prefixLength = [int]$cidrParts[1]
 
     try {
         $ipAddress = [System.Net.IPAddress]::Parse($IP)
@@ -28,31 +34,30 @@ function Test-IPInSubnet {
         return $false
     }
 
-    if ($ipAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork -or
-        $networkAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+    # Mixed families never match — return false, never throw.
+    if ($ipAddress.AddressFamily -ne $networkAddress.AddressFamily) {
         return $false
     }
 
+    # Validate prefix length for the address family.
+    $maxPrefix = if ($ipAddress.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) { 32 } else { 128 }
+    if ($prefixLength -lt 0 -or $prefixLength -gt $maxPrefix) {
+        return $false
+    }
+
+    # Compare bytes up to prefix length.
     $ipBytes = $ipAddress.GetAddressBytes()
     $networkBytes = $networkAddress.GetAddressBytes()
 
-    if ([System.BitConverter]::IsLittleEndian) {
-        [Array]::Reverse($ipBytes)
-        [Array]::Reverse($networkBytes)
-    }
+    $fullBytes = [math]::Floor($prefixLength / 8)
+    $remainBits = $prefixLength % 8
 
-    $ipValue = [System.BitConverter]::ToUInt32($ipBytes, 0)
-    $networkValue = [System.BitConverter]::ToUInt32($networkBytes, 0)
-
-    # Build the prefix mask. Compute in UInt64 to avoid the int overflow that
-    # '[uint32]0xFFFFFFFF -shl n' triggers (0xFFFFFFFF parses as int -1), then
-    # truncate back to 32 bits.
-    $mask = if ($prefixLength -eq 0) {
-        [uint32]0
+    for ($i = 0; $i -lt $fullBytes; $i++) {
+        if ($ipBytes[$i] -ne $networkBytes[$i]) { return $false }
     }
-    else {
-        [uint32]((([uint64]4294967295) -shl (32 - $prefixLength)) -band [uint64]4294967295)
+    if ($remainBits -gt 0) {
+        $mask = 0xFF -shl (8 - $remainBits)
+        if (($ipBytes[$fullBytes] -band $mask) -ne ($networkBytes[$fullBytes] -band $mask)) { return $false }
     }
-
-    return (($ipValue -band $mask) -eq ($networkValue -band $mask))
+    return $true
 }

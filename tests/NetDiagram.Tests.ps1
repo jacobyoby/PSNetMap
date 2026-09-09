@@ -1023,6 +1023,30 @@ Describe 'Test-IPInSubnet (private helper)' {
             Test-IPInSubnet -IP '192.168.1.50' -CIDR 'not-a-cidr' | Should -Be $false
         }
     }
+
+    It 'Should match an IPv6 address inside its CIDR range' {
+        InModuleScope 'NetDiagram-PS' {
+            Test-IPInSubnet -IP '2001:db8::1' -CIDR '2001:db8::/32' | Should -Be $true
+        }
+    }
+
+    It 'Should reject an IPv6 address outside the CIDR range' {
+        InModuleScope 'NetDiagram-PS' {
+            Test-IPInSubnet -IP '2001:db8:1::1' -CIDR '2001:db8::/48' | Should -Be $false
+        }
+    }
+
+    It 'Should return false for mixed address families (v4 address, v6 CIDR)' {
+        InModuleScope 'NetDiagram-PS' {
+            Test-IPInSubnet -IP '192.168.1.1' -CIDR '2001:db8::/32' | Should -Be $false
+        }
+    }
+
+    It 'Should return false for mixed address families (v6 address, v4 CIDR)' {
+        InModuleScope 'NetDiagram-PS' {
+            Test-IPInSubnet -IP '2001:db8::1' -CIDR '192.168.0.0/16' | Should -Be $false
+        }
+    }
 }
 
 Describe 'SNMP credential-map precedence (#17 regression)' {
@@ -1342,6 +1366,45 @@ Describe 'Export-DrawIO subnet container parenting' {
         foreach ($n in $nodeCells) {
             $n.parent | Should -Be $container.id
         }
+    }
+
+    It 'Parents IPv6 nodes into the matching IPv6 subnet container' {
+        $nodes = @(
+            [pscustomobject]@{
+                IP = '2001:db8::10'; Hostname = 'v6-node'; Role = 'switch'
+                Vendor = 'Test'; OS = 'Test'; Layer = 'Access'; Reachable = $null
+            }
+            [pscustomobject]@{
+                IP = '192.168.1.10'; Hostname = 'v4-node'; Role = 'switch'
+                Vendor = 'Test'; OS = 'Test'; Layer = 'Access'; Reachable = $null
+            }
+        )
+        $topology = [pscustomobject]@{
+            Nodes = $nodes
+            Edges = @()
+            Subnets = @(
+                [pscustomobject]@{ CIDR = '2001:db8::/32'; Label = 'v6-net'; VLAN = 100 }
+                [pscustomobject]@{ CIDR = '192.168.1.0/24'; Label = 'v4-net'; VLAN = 1 }
+            )
+        }
+        $drawioPath = Join-Path $script:TestDataPath 'ipv6-containers.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath
+
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $containers = @($xml.SelectNodes("//mxCell[contains(@style,'swimlane')]"))
+        $containers.Count | Should -Be 2
+
+        # Find v6 container by its label
+        $v6Container = $containers | Where-Object { $_.value -match 'v6-net' }
+        $v4Container = $containers | Where-Object { $_.value -match 'v4-net' }
+        $v6Container | Should -Not -BeNullOrEmpty
+        $v4Container | Should -Not -BeNullOrEmpty
+
+        # Verify v6 node is parented to v6 container and v4 node to v4 container
+        $v6Node = $xml.SelectSingleNode("//UserObject[@ip='2001:db8::10']")
+        $v4Node = $xml.SelectSingleNode("//UserObject[@ip='192.168.1.10']")
+        $v6Node.mxCell.parent | Should -Be $v6Container.id
+        $v4Node.mxCell.parent | Should -Be $v4Container.id
     }
 }
 

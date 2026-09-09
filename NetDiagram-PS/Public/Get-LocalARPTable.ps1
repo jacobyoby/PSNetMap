@@ -27,20 +27,22 @@ function Get-LocalARPTable {
     $arpEntries = @()
 
     if ($IsWindows) {
-            # Windows: Use Get-NetNeighbor
-            $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction Stop
+            # Windows: Use Get-NetNeighbor (both IPv4 and IPv6)
+            $neighbors = Get-NetNeighbor -ErrorAction Stop
 
             if ($InterfaceAlias) {
                 $neighbors = $neighbors | Where-Object { $_.InterfaceAlias -eq $InterfaceAlias }
             }
 
             foreach ($entry in $neighbors) {
+                $family = if ($entry.AddressFamily -eq 'IPv4') { 'IPv4' } else { 'IPv6' }
                 $arpEntries += [pscustomobject]@{
                     IPAddress       = $entry.IPAddress
                     MACAddress      = $entry.LinkLayerAddress
                     State           = $entry.State
                     InterfaceAlias  = $entry.InterfaceAlias
                     InterfaceIndex  = $entry.InterfaceIndex
+                    AddressFamily   = $family
                 }
             }
     }

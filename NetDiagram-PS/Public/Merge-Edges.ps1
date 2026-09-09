@@ -4,8 +4,9 @@ function Merge-Edges {
         Merges and deduplicates edge candidates
     .DESCRIPTION
         Deduplicates edges using sorted endpoints as key.
-        Prioritizes verified L2-SNMP, then provisional L2-SNMP-Heuristic, then
-        L3-Inferred. An SNMP source alone never promotes an edge to verified.
+        Prioritizes verified L2-SNMP, then L2-FDB (bridge forwarding table),
+        then provisional L2-SNMP-Heuristic, then L3-Inferred.
+        An SNMP source alone never promotes an edge to verified.
         Keeps first non-empty label.
     .PARAMETER Edges
         Array of edge objects to merge
@@ -53,7 +54,8 @@ function Merge-Edges {
         $confidenceRank = @{
             'L3-Inferred' = 1
             'L2-SNMP-Heuristic' = 2
-            'L2-SNMP' = 3
+            'L2-FDB' = 3
+            'L2-SNMP' = 4
         }
 
         if ($edgeMap.Contains($key)) {
@@ -81,6 +83,10 @@ function Merge-Edges {
                 Confidence = $incomingConfidence
             }
         }
+    }
+
+    if ($edgeMap.Count -eq 0) {
+        return @()
     }
 
     return @($edgeMap.Values)

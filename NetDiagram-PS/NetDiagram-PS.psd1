@@ -26,6 +26,7 @@
         # Level 2 & 3: SNMP Discovery
         'Invoke-SnmpWalk'
         'Get-SnmpNeighbors'
+        'Get-SnmpBridgeNeighbors'
         'Get-CommonSNMPStrings'
 
         # Export and Analysis

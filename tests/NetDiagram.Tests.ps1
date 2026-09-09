@@ -494,6 +494,66 @@ Describe 'Test-IPInSubnet (private helper)' {
     }
 }
 
+Describe 'SNMP credential-map precedence (#17 regression)' {
+    It 'Uses a matching subnet even when Default appears first' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"Default":{"communitySecret":"fallback"},"192.168.1.0/24":{"communitySecret":"office"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be '192.168.1.0/24'
+            $match.Config.communitySecret | Should -Be 'office'
+        }
+    }
+
+    It 'Uses a matching subnet when Default appears last' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"192.168.1.0/24":{"communitySecret":"office"},"Default":{"communitySecret":"fallback"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be '192.168.1.0/24'
+        }
+    }
+
+    It 'Chooses the longest matching prefix' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"10.0.0.0/16":{"communitySecret":"site"},"10.0.4.0/24":{"communitySecret":"floor"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '10.0.4.25'
+
+            $match.CIDR | Should -Be '10.0.4.0/24'
+            $match.Config.communitySecret | Should -Be 'floor'
+        }
+    }
+
+    It 'Falls back to Default when no subnet matches' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"10.0.0.0/8":{"communitySecret":"internal"},"Default":{"communitySecret":"fallback"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be 'Default'
+            $match.Config.communitySecret | Should -Be 'fallback'
+        }
+    }
+
+    It 'Rejects an invalid CIDR entry' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"192.168.999.0/24":{"communitySecret":"bad"}}' | ConvertFrom-Json
+
+            { Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40' } |
+                Should -Throw '*Invalid SNMP credential-map CIDR*'
+        }
+    }
+
+    It 'Returns the selected entry when its secret name is missing' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"192.168.1.0/24":{"version":"v2c"},"Default":{"communitySecret":"fallback"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be '192.168.1.0/24'
+            $match.Config.PSObject.Properties['communitySecret'] | Should -BeNullOrEmpty
+        }
+    }
+}
+
 Describe 'Get-SnmpNeighbors node eligibility (#1 regression)' {
     BeforeEach {
         # Empty credential map is valid; -TryPublic supplies the community so no

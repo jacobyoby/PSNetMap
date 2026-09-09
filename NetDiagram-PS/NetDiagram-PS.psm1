@@ -337,6 +337,11 @@ function Get-SnmpNeighbors {
         Uses credential map to resolve community strings from SecretManagement.
         Adds discovered edges to the topology with L2-SNMP confidence.
 
+        CREDENTIAL MATCHING: The most specific matching IPv4 CIDR wins regardless of
+        JSON property order. Default is used only when no CIDR matches. If the selected
+        entry has no available community secret, the node is skipped unless -TryPublic
+        was explicitly supplied.
+
         NODE ELIGIBILITY: By default every node is queried EXCEPT nodes that have been
         explicitly marked unreachable (Reachable -eq $false). Nodes with unknown
         reachability (Reachable -eq $null, e.g. straight after Import-Inventory) ARE
@@ -453,16 +458,14 @@ All SNMP attempts will be logged to verbose output.
             $source = 'CredentialMap'
 
             if ($credMap.PSObject.Properties['snmp'] -and $credMap.snmp) {
-                foreach ($cidrEntry in $credMap.snmp.PSObject.Properties) {
-                    $cidr = $cidrEntry.Name
-                    $config = $cidrEntry.Value
-
-                    # Simple CIDR matching (for MVP, just match Default or exact match)
-                    if ($cidr -eq 'Default' -or (Test-IPInSubnet -IP $node.IP -CIDR $cidr)) {
-                        if ($config.PSObject.Properties['communitySecret']) {
-                            $communitySecret = $config.communitySecret
-                            break
-                        }
+                $credentialMatch = Resolve-SnmpCredentialConfig -SnmpMap $credMap.snmp -IPAddress $node.IP
+                if ($credentialMatch) {
+                    $source = "CredentialMap:$($credentialMatch.CIDR)"
+                    if ($credentialMatch.Config.PSObject.Properties['communitySecret']) {
+                        $communitySecret = $credentialMatch.Config.communitySecret
+                    }
+                    else {
+                        Write-Warning "SNMP credential entry '$($credentialMatch.CIDR)' has no communitySecret; skipping configured credential for $($node.IP)"
                     }
                 }
             }
@@ -571,6 +574,57 @@ All SNMP attempts will be logged to verbose output.
 
         return $Topology
     }
+}
+
+function Resolve-SnmpCredentialConfig {
+    param(
+        [Parameter(Mandatory)][psobject]$SnmpMap,
+        [Parameter(Mandatory)][string]$IPAddress
+    )
+
+    $defaultConfig = $null
+    $cidrMatches = @()
+
+    foreach ($entry in $SnmpMap.PSObject.Properties) {
+        if ($entry.Name -eq 'Default') {
+            $defaultConfig = $entry.Value
+            continue
+        }
+
+        if ($entry.Name -notmatch '^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$') {
+            throw "Invalid SNMP credential-map CIDR '$($entry.Name)'. Expected an IPv4 CIDR or Default."
+        }
+
+        $prefixLength = [int]$matches[2]
+        $networkAddress = $null
+        if ($prefixLength -gt 32 -or
+            -not [System.Net.IPAddress]::TryParse($matches[1], [ref]$networkAddress) -or
+            $networkAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+            throw "Invalid SNMP credential-map CIDR '$($entry.Name)'. Expected an IPv4 CIDR or Default."
+        }
+
+        if (Test-IPInSubnet -IP $IPAddress -CIDR $entry.Name) {
+            $cidrMatches += [pscustomobject]@{
+                CIDR = $entry.Name
+                PrefixLength = $prefixLength
+                Config = $entry.Value
+            }
+        }
+    }
+
+    $bestMatch = $cidrMatches | Sort-Object PrefixLength -Descending | Select-Object -First 1
+    if ($bestMatch) {
+        return $bestMatch
+    }
+    if ($null -ne $defaultConfig) {
+        return [pscustomobject]@{
+            CIDR = 'Default'
+            PrefixLength = -1
+            Config = $defaultConfig
+        }
+    }
+
+    return $null
 }
 
 function Test-IPInSubnet {

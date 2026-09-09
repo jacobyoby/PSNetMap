@@ -1216,3 +1216,37 @@ Describe 'Quick-start wizard interface selection (#15 regression)' {
             Should -Throw '*was not found*'
     }
 }
+
+Describe 'Export overwrite protection (#27 regression)' {
+    It 'Refuses to overwrite an existing file without -Force' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $drawioPath = Join-Path $script:TestDataPath 'overwrite-test.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath -Force
+        { $topology | Export-DrawIO -OutFile $drawioPath } | Should -Throw "*already exists*Use -Force*"
+        $metaPath = Join-Path $script:TestDataPath 'overwrite-test.json'
+        $topology | Export-Metadata -OutFile $metaPath -Force
+        { $topology | Export-Metadata -OutFile $metaPath } | Should -Throw "*already exists*Use -Force*"
+    }
+
+    It 'Overwrites an existing file when -Force is specified' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $drawioPath = Join-Path $script:TestDataPath 'overwrite-force.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath -Force
+        $firstHash = (Get-FileHash $drawioPath -Algorithm SHA256).Hash
+        $topology | Export-DrawIO -OutFile $drawioPath -Force
+        (Get-FileHash $drawioPath -Algorithm SHA256).Hash | Should -Be $firstHash
+        $metaPath = Join-Path $script:TestDataPath 'overwrite-force-meta.json'
+        $topology | Export-Metadata -OutFile $metaPath -Force
+        { $topology | Export-Metadata -OutFile $metaPath -Force } | Should -Not -Throw
+    }
+
+    It 'Does not write a file when -WhatIf is specified' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $drawioPath = Join-Path $script:TestDataPath 'whatif-test.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath -WhatIf
+        Test-Path $drawioPath | Should -Be $false
+        $metaPath = Join-Path $script:TestDataPath 'whatif-test.json'
+        $topology | Export-Metadata -OutFile $metaPath -WhatIf
+        Test-Path $metaPath | Should -Be $false
+    }
+}

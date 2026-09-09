@@ -876,18 +876,28 @@ function Export-DrawIO {
     .EXAMPLE
         $topo | Export-DrawIO -OutFile '.\network.drawio'
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
         [Parameter(Mandatory, ValueFromPipeline)]
         [pscustomobject]$Topology,
 
         [Parameter(Mandatory)]
-        [string]$OutFile
+        [string]$OutFile,
+
+        [Parameter()]
+        [switch]$Force
     )
 
     process {
         if ($null -eq $Topology -or $null -eq $Topology.Nodes) {
             throw "Invalid topology object"
+        }
+
+        if ((Test-Path -LiteralPath $OutFile) -and -not $Force) {
+            throw "File '$OutFile' already exists. Use -Force to overwrite."
+        }
+        if (-not $PSCmdlet.ShouldProcess($OutFile, 'Export-DrawIO')) {
+            return
         }
 
         # De-duplicate nodes by IP first. Duplicate IPs would otherwise share a single
@@ -1191,7 +1201,7 @@ function Export-Metadata {
     .EXAMPLE
         $topo | Export-Metadata -OutFile '.\scanmeta.json'
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
         [Parameter(Mandatory, ValueFromPipeline)]
         [pscustomobject]$Topology,
@@ -1200,12 +1210,22 @@ function Export-Metadata {
         [string]$OutFile,
 
         [Parameter()]
-        [string[]]$CredSetsUsed = @()
+        [string[]]$CredSetsUsed = @(),
+
+        [Parameter()]
+        [switch]$Force
     )
 
     process {
         if ($null -eq $Topology) {
             throw "Invalid topology object"
+        }
+
+        if ((Test-Path -LiteralPath $OutFile) -and -not $Force) {
+            throw "File '$OutFile' already exists. Use -Force to overwrite."
+        }
+        if (-not $PSCmdlet.ShouldProcess($OutFile, 'Export-Metadata')) {
+            return
         }
 
         # Calculate confidence counts

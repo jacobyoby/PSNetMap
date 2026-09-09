@@ -603,7 +603,7 @@ $topology = [pscustomobject]@{
 Write-Host "`n[5/5] Generating your network diagram..." -ForegroundColor Yellow
 
 $inventoryPath = Get-InventoryOutputPath -DiagramPath $OutputPath
-$topology | Export-DrawIO -OutFile $OutputPath
+$topology | Export-DrawIO -OutFile $OutputPath -Force
 
 if (Test-Path $OutputPath) {
     $fileSize = (Get-Item $OutputPath).Length

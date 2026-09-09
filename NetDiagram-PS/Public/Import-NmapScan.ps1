@@ -4,8 +4,13 @@ function Import-NmapScan {
         Imports topology from nmap XML output
     .DESCRIPTION
         Parses nmap -oX XML and returns a Topology with Nodes derived from hosts
-        whose status is up. Maps address/hostname/vendor/OS/ports. Role stays
-        unknown unless nmap data clearly indicates otherwise.
+        whose status is up. Reads IPv4 and IPv6 address elements (addrtype
+        ipv4/ipv6). When both families are present on one host, IPv4 is preferred
+        so the host keeps a single node identity; IPv6 is used only when no IPv4
+        address is present. Addresses are validated with [System.Net.IPAddress]::Parse
+        and stored in canonical form; malformed addresses are skipped. Maps
+        hostname/vendor/OS/ports. Role stays unknown unless nmap data clearly
+        indicates otherwise.
     .PARAMETER Path
         Path to nmap XML file
     .EXAMPLE
@@ -37,14 +42,26 @@ function Import-NmapScan {
         if ($state -and $state -ne 'up') { continue }
 
         $ipv4 = $null
+        $ipv6 = $null
         foreach ($addr in @($hostNode.address)) {
-            if ($addr.addrtype -eq 'ipv4' -and $addr.addr) { $ipv4 = $addr.addr; break }
+            if (-not $addr.addr) { continue }
+            if ($addr.addrtype -eq 'ipv4' -and -not $ipv4) { $ipv4 = $addr.addr }
+            elseif ($addr.addrtype -eq 'ipv6' -and -not $ipv6) { $ipv6 = $addr.addr }
         }
-        if (-not $ipv4) { continue }
 
-        try { $null = [System.Net.IPAddress]::Parse($ipv4) } catch { continue }
+        # One node per nmap host: prefer IPv4 when both families are present.
+        $chosen = if ($ipv4) { $ipv4 } else { $ipv6 }
+        if (-not $chosen) { continue }
 
-        $hostname = $ipv4
+        try {
+            $parsed = [System.Net.IPAddress]::Parse($chosen)
+        }
+        catch {
+            continue
+        }
+        $ip = $parsed.ToString()
+
+        $hostname = $ip
         if ($hostNode.PSObject.Properties['hostnames'] -and $hostNode.hostnames -and $hostNode.hostnames.PSObject.Properties['hostname'] -and $hostNode.hostnames.hostname) {
             $hn = @($hostNode.hostnames.hostname)[0]
             if ($hn.PSObject.Properties['name'] -and $hn.name) { $hostname = $hn.name }
@@ -73,7 +90,7 @@ function Import-NmapScan {
         }
 
         $nodes += [pscustomobject]@{
-            IP         = $ipv4
+            IP         = $ip
             Hostname   = $hostname
             Role       = 'unknown'
             Vendor     = $vendor

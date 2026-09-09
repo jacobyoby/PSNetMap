@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" args="nmap -6 -oX scan.xml 2001:db8::/64">
+<host><status state="up"/><address addr="2001:db8::10" addrtype="ipv6"/><address addr="AA:BB:CC:DD:EE:01" addrtype="mac" vendor="V6Vendor"/><hostnames><hostname name="v6only.example.com" type="PTR"/></hostnames><ports><port protocol="tcp" portid="22"><state state="open"/></port></ports></host>
+<host><status state="up"/><address addr="192.168.1.30" addrtype="ipv4"/><address addr="2001:db8::30" addrtype="ipv6"/><hostnames><hostname name="dual.example.com" type="PTR"/></hostnames></host>
+<host><status state="down"/><address addr="2001:db8::99" addrtype="ipv6"/><hostnames><hostname name="down-v6.example.com"/></hostnames></host>
+<host><status state="up"/><address addr="not-an-ip" addrtype="ipv6"/></host>
+</nmaprun>

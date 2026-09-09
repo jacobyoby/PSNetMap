@@ -1864,7 +1864,12 @@ function Get-MACVendor {
     .DESCRIPTION
         Identifies the manufacturer of a network device based on its MAC address
         using the Organizationally Unique Identifier (OUI) lookup.
-        No credentials required, uses built-in OUI database.
+        No credentials required. The built-in table is a 31-prefix sample; for
+        full coverage download the IEEE oui.csv and use -OuiDatabasePath.
+
+        Example to fetch the full registry:
+          Invoke-WebRequest -Uri https://standards-oui.ieee.org/oui/oui.csv -OutFile ./oui.csv
+          Get-MACVendor -MACAddress '00:1A:A0:12:34:56' -OuiDatabasePath ./oui.csv
     .PARAMETER MACAddress
         MAC address in any common format (AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF, AABBCCDDEEFF)
     .EXAMPLE
@@ -1879,11 +1884,14 @@ function Get-MACVendor {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, ValueFromPipeline)]
-        [string[]]$MACAddress
+        [string[]]$MACAddress,
+
+        [Parameter()]
+        [string]$OuiDatabasePath
     )
 
     begin {
-        # Common OUI prefix database (top vendors)
+        # Common OUI prefix database (top vendors) — 31-prefix sample
         $ouiDatabase = @{
             '00:1A:A0' = 'Dell'
             '00:50:56' = 'VMware'
@@ -1916,6 +1924,29 @@ function Get-MACVendor {
             '00:21:5A' = 'HP'
             '00:30:6E' = 'Netgear'
             '00:09:5B' = 'Netgear'
+        }
+
+        # Optionally load full IEEE oui.csv (Assignment, Organization Name)
+        if ($OuiDatabasePath) {
+            if (-not (Test-Path -LiteralPath $OuiDatabasePath)) {
+                throw "OUI database file not found: '$OuiDatabasePath'"
+            }
+            try {
+                $rows = Import-Csv -LiteralPath $OuiDatabasePath
+                if ($rows.Count -eq 0 -or -not $rows[0].PSObject.Properties['Assignment'] -or -not $rows[0].PSObject.Properties['Organization Name']) {
+                    throw "OUI CSV missing required columns 'Assignment' and 'Organization Name'"
+                }
+                foreach ($r in $rows) {
+                    $assignment = ([string]$r.Assignment -replace '[^0-9A-Fa-f]', '').ToUpper()
+                    if ($assignment.Length -ge 6) {
+                        $prefix = $assignment.Substring(0, 2) + ':' + $assignment.Substring(2, 2) + ':' + $assignment.Substring(4, 2)
+                        $ouiDatabase[$prefix] = [string]$r.'Organization Name'
+                    }
+                }
+            }
+            catch {
+                throw "Failed to load OUI database '$OuiDatabasePath': $_"
+            }
         }
     }
 

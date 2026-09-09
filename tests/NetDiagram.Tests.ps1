@@ -707,6 +707,14 @@ Describe 'Get-MACVendor' {
         $results | Should -HaveCount 2
         $results[1].Vendor | Should -Be 'VMware'
     }
+
+    It 'Should load a fixture CSV via -OuiDatabasePath and resolve a non-builtin prefix' {
+        $csvPath = Join-Path $script:TestDataPath 'oui-fixture.csv'
+        "Assignment,Organization Name`nAABBCC,TestVendor-AA`n112233,TestVendor-11`nDDEEFF,TestVendor-DD" | Out-File -FilePath $csvPath -Encoding utf8
+        (Get-MACVendor -MACAddress 'AA:BB:CC:11:22:33' -OuiDatabasePath $csvPath).Vendor | Should -Be 'TestVendor-AA'
+        (Get-MACVendor -MACAddress '11:22:33:AA:BB:CC' -OuiDatabasePath $csvPath).Vendor | Should -Be 'TestVendor-11'
+        { Get-MACVendor -MACAddress '00:1A:A0:00:00:00' -OuiDatabasePath '/no/such/oui.csv' } | Should -Throw "*not found*"
+    }
 }
 
 Describe 'Get-CommonSNMPStrings' {

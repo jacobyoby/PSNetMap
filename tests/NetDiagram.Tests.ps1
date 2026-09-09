@@ -62,6 +62,7 @@ Describe 'Module Import' {
         $commandNames | Should -Contain 'Export-NetBox'
         $commandNames | Should -Contain 'Import-NmapScan'
         $commandNames | Should -Contain 'Compare-NetworkScans'
+        $commandNames | Should -Contain 'Get-SnmpBridgeNeighbors'
     }
 }
 
@@ -264,6 +265,42 @@ Describe 'Merge-Edges' {
         $merged = Merge-Edges -Edges $edges
         $merged | Should -HaveCount 1
         $merged[0].Label | Should -Be 'Good'
+    }
+
+    It 'Three-way confidence ranking: L2-SNMP > L2-FDB > L3-Inferred (forward order)' {
+        $edges = @(
+            [pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'inferred'; Source = 'Manual'; Confidence = 'L3-Inferred' }
+            [pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'fdb'; Source = 'SNMP-FDB'; Confidence = 'L2-FDB' }
+            [pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'snmp'; Source = 'SNMP'; Confidence = 'L2-SNMP' }
+        )
+
+        $merged = Merge-Edges -Edges $edges
+        $merged | Should -HaveCount 1
+        $merged[0].Confidence | Should -Be 'L2-SNMP'
+    }
+
+    It 'Three-way confidence ranking: L2-SNMP > L2-FDB > L3-Inferred (reverse order)' {
+        $edges = @(
+            [pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'snmp'; Source = 'SNMP'; Confidence = 'L2-SNMP' }
+            [pscustomobject]@{ SourceIP = '10.0.0.2'; TargetIP = '10.0.0.1'; Label = 'fdb'; Source = 'SNMP-FDB'; Confidence = 'L2-FDB' }
+            [pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'inferred'; Source = 'Manual'; Confidence = 'L3-Inferred' }
+        )
+
+        $merged = Merge-Edges -Edges $edges
+        $merged | Should -HaveCount 1
+        $merged[0].Confidence | Should -Be 'L2-SNMP'
+    }
+
+    It 'L2-FDB outranks L3-Inferred and L2-SNMP-Heuristic' {
+        $edges = @(
+            [pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'hint'; Source = 'SNMP'; Confidence = 'L2-SNMP-Heuristic' }
+            [pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'inferred'; Source = 'Manual'; Confidence = 'L3-Inferred' }
+            [pscustomobject]@{ SourceIP = '10.0.0.2'; TargetIP = '10.0.0.1'; Label = 'fdb'; Source = 'SNMP-FDB'; Confidence = 'L2-FDB' }
+        )
+
+        $merged = Merge-Edges -Edges $edges
+        $merged | Should -HaveCount 1
+        $merged[0].Confidence | Should -Be 'L2-FDB'
     }
 }
 
@@ -575,6 +612,151 @@ Describe 'Export-NodeInventoryCsv (#41 regression)' {
         $whatIf = Join-Path $script:TestDataPath 'csv-whatif.csv'
         $topo | Export-NodeInventoryCsv -OutFile $whatIf -WhatIf
         Test-Path $whatIf | Should -Be $false
+    }
+}
+
+Describe 'Get-SnmpBridgeNeighbors (#39 regression)' {
+    BeforeEach {
+        $script:CredMapPath = Join-Path $script:TestDataPath 'credmap-bridge.json'
+        '{}' | Out-File -FilePath $script:CredMapPath -Force
+    }
+
+    It 'Produces edges from BRIDGE-MIB snmpwalk text for learned MACs with ARP matches' {
+        # Simulated snmpwalk output for three BRIDGE-MIB columns:
+        #   dot1dTpFdbAddress (1.3.6.1.2.1.17.4.3.1.1) — MAC as Hex-STRING
+        #   dot1dTpFdbPort    (1.3.6.1.2.1.17.4.3.1.2) — INTEGER port number
+        #   dot1dTpFdbStatus  (1.3.6.1.2.1.17.4.3.1.3) — INTEGER status
+        # MAC AA:BB:CC:DD:EE:01 (index 170.187.204.221.238.1) = learned (status=3), port 5
+        # MAC AA:BB:CC:DD:EE:02 (index 170.187.204.221.238.2) = learned (status=3), port 8
+        # MAC AA:BB:CC:DD:EE:03 (index 170.187.204.221.238.3) = self (status=4), port 1 (should be filtered)
+
+        $addressLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.1.170.187.204.221.238.1 = Hex-STRING: AA BB CC DD EE 01'
+            '.1.3.6.1.2.1.17.4.3.1.1.170.187.204.221.238.2 = Hex-STRING: AA BB CC DD EE 02'
+            '.1.3.6.1.2.1.17.4.3.1.1.170.187.204.221.238.3 = Hex-STRING: AA BB CC DD EE 03'
+        )
+        $portLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.2.170.187.204.221.238.1 = INTEGER: 5'
+            '.1.3.6.1.2.1.17.4.3.1.2.170.187.204.221.238.2 = INTEGER: 8'
+            '.1.3.6.1.2.1.17.4.3.1.2.170.187.204.221.238.3 = INTEGER: 1'
+        )
+        $statusLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.3.170.187.204.221.238.1 = INTEGER: 3'
+            '.1.3.6.1.2.1.17.4.3.1.3.170.187.204.221.238.2 = INTEGER: 3'
+            '.1.3.6.1.2.1.17.4.3.1.3.170.187.204.221.238.3 = INTEGER: 4'
+        )
+
+        $topology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP = '10.0.0.1'; Hostname = 'switch1'; Role = 'switch'; Vendor = 'X'; OS = 'X'; Layer = 'Access'; Reachable = $true }
+                [pscustomobject]@{ IP = '10.0.0.10'; Hostname = 'host10'; Role = 'server'; Vendor = 'X'; OS = 'X'; Layer = 'Servers'; Reachable = $true }
+                [pscustomobject]@{ IP = '10.0.0.20'; Hostname = 'host20'; Role = 'server'; Vendor = 'X'; OS = 'X'; Layer = 'Servers'; Reachable = $true }
+            )
+            Edges = @()
+            Subnets = @()
+        }
+
+        Mock Invoke-SnmpWalk {
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.1') { return $addressLines }
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.2') { return $portLines }
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.3') { return $statusLines }
+            return @()
+        } -ModuleName 'NetDiagram-PS'
+
+        Mock Get-LocalARPTable {
+            @(
+                [pscustomobject]@{ IPAddress = '10.0.0.10'; MACAddress = 'AA:BB:CC:DD:EE:01' }
+                [pscustomobject]@{ IPAddress = '10.0.0.20'; MACAddress = 'AA:BB:CC:DD:EE:02' }
+            )
+        } -ModuleName 'NetDiagram-PS'
+
+        $result = $topology | Get-SnmpBridgeNeighbors -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+
+        # Two learned MACs with ARP matches → two edges (status=4 is filtered out)
+        $result.Edges | Should -HaveCount 2
+        $result.Edges[0].Source | Should -Be 'SNMP-FDB'
+        $result.Edges[0].Confidence | Should -Be 'L2-FDB'
+        ($result.Edges | Where-Object TargetIP -eq '10.0.0.10').Label | Should -Be 'port-5'
+        ($result.Edges | Where-Object TargetIP -eq '10.0.0.20').Label | Should -Be 'port-8'
+    }
+
+    It 'Filters out entries where status is not 3 (learned)' {
+        # All three entries have status != 3
+        $addressLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.1.1.2.3.4.5.6 = Hex-STRING: 01 02 03 04 05 06'
+            '.1.3.6.1.2.1.17.4.3.1.1.7.8.9.10.11.12 = Hex-STRING: 07 08 09 0A 0B 0C'
+        )
+        $portLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.2.1.2.3.4.5.6 = INTEGER: 1'
+            '.1.3.6.1.2.1.17.4.3.1.2.7.8.9.10.11.12 = INTEGER: 2'
+        )
+        $statusLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.3.1.2.3.4.5.6 = INTEGER: 4'
+            '.1.3.6.1.2.1.17.4.3.1.3.7.8.9.10.11.12 = INTEGER: 2'
+        )
+
+        $topology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP = '10.0.0.1'; Hostname = 'sw'; Role = 'switch'; Vendor = 'X'; OS = 'X'; Layer = 'Access'; Reachable = $true }
+                [pscustomobject]@{ IP = '10.0.0.50'; Hostname = 'host50'; Role = 'server'; Vendor = 'X'; OS = 'X'; Layer = 'Servers'; Reachable = $true }
+            )
+            Edges = @()
+            Subnets = @()
+        }
+
+        Mock Invoke-SnmpWalk {
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.1') { return $addressLines }
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.2') { return $portLines }
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.3') { return $statusLines }
+            return @()
+        } -ModuleName 'NetDiagram-PS'
+
+        Mock Get-LocalARPTable {
+            @(
+                [pscustomobject]@{ IPAddress = '10.0.0.50'; MACAddress = '01:02:03:04:05:06' }
+            )
+        } -ModuleName 'NetDiagram-PS'
+
+        $result = $topology | Get-SnmpBridgeNeighbors -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+        $result.Edges | Should -HaveCount 0
+    }
+
+    It 'Unresolvable MAC yields no edge (verbose message, not warning)' {
+        $addressLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.1.1.2.3.4.5.6 = Hex-STRING: 01 02 03 04 05 06'
+        )
+        $portLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.2.1.2.3.4.5.6 = INTEGER: 3'
+        )
+        $statusLines = @(
+            '.1.3.6.1.2.1.17.4.3.1.3.1.2.3.4.5.6 = INTEGER: 3'
+        )
+
+        $topology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP = '10.0.0.1'; Hostname = 'sw'; Role = 'switch'; Vendor = 'X'; OS = 'X'; Layer = 'Access'; Reachable = $true }
+            )
+            Edges = @()
+            Subnets = @()
+        }
+
+        Mock Invoke-SnmpWalk {
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.1') { return $addressLines }
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.2') { return $portLines }
+            if ($OID -eq '1.3.6.1.2.1.17.4.3.1.3') { return $statusLines }
+            return @()
+        } -ModuleName 'NetDiagram-PS'
+
+        # Empty ARP table — MAC cannot be resolved
+        Mock Get-LocalARPTable { @() } -ModuleName 'NetDiagram-PS'
+
+        # Should NOT produce a warning (Write-Warning should not be called for unresolvable MACs)
+        $result = $topology | Get-SnmpBridgeNeighbors -CredentialMapPath $script:CredMapPath -TryPublic -WarningVariable warns -WarningAction SilentlyContinue
+
+        $result.Edges | Should -HaveCount 0
+        # Filter out the TryPublic security warning (if any); no bridge-related warnings
+        $bridgeWarns = @($warns | Where-Object { $_ -notmatch 'SECURITY WARNING' -and $_ -notmatch 'TryPublic' -and $_ -notmatch 'public' })
+        $bridgeWarns | Should -HaveCount 0
     }
 }
 

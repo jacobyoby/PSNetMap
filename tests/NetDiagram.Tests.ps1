@@ -701,13 +701,53 @@ Describe 'Export-DrawIO duplicate-IP handling (#8 regression)' {
         $topology | Export-DrawIO -OutFile $drawioPath -WarningAction SilentlyContinue
 
         $xml = [xml](Get-Content -Path $drawioPath -Raw)
-        $ids = @($xml.SelectNodes('//mxCell') | ForEach-Object { $_.id })
+        $ids = @($xml.SelectNodes('//*[@id]') | ForEach-Object { $_.id })
 
         # All mxCell ids must be unique
         ($ids | Sort-Object -Unique).Count | Should -Be $ids.Count
 
         # Duplicate IP collapsed to a single node vertex (2 unique IPs)
         @($xml.SelectNodes("//mxCell[@vertex='1']")).Count | Should -Be 2
+    }
+}
+
+Describe 'Export-DrawIO tooltip and reachability metadata (#10 regression)' {
+    It 'Emits draw.io UserObjects with consistent metadata for all three states' {
+        $topology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP = '192.168.1.1'; Hostname = 'router'; Role = 'router'; Vendor = 'Cisco'; OS = 'IOS'; Layer = 'Core'; Reachable = $true }
+                [pscustomobject]@{ IP = '192.168.1.2'; Hostname = 'switch'; Role = 'switch'; Vendor = 'Cisco'; OS = 'NX-OS'; Layer = 'Access'; Reachable = $false }
+                [pscustomobject]@{ IP = '192.168.1.3'; Hostname = 'untested-router'; Role = 'router'; Vendor = 'Unknown'; OS = 'Unknown'; Layer = 'Core'; Reachable = $null }
+                [pscustomobject]@{ IP = '192.168.1.4'; Hostname = 'untested-switch'; Role = 'switch'; Vendor = 'Unknown'; OS = 'Unknown'; Layer = 'Access'; Reachable = $null }
+            )
+            Edges = @(
+                [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.3'; Label = 'Test'; Confidence = 'L3-Inferred' }
+            )
+            Subnets = @()
+        }
+        $drawioPath = Join-Path $script:TestDataPath 'status-tooltips.drawio'
+
+        $topology | Export-DrawIO -OutFile $drawioPath
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $objects = @($xml.SelectNodes('//UserObject'))
+
+        $objects | Should -HaveCount 4
+        @($objects.status) | Should -Contain 'Reachable'
+        @($objects.status) | Should -Contain 'Unreachable'
+        @($objects.status) | Should -Contain 'Unknown'
+
+        $unknown = @($objects | Where-Object { $_.status -eq 'Unknown' })
+        $unknown | Should -HaveCount 2
+        @($unknown.role) | Should -Contain 'router'
+        @($unknown.role) | Should -Contain 'switch'
+        foreach ($node in $unknown) {
+            $node.tooltip | Should -Match 'Status: Unknown'
+            $node.mxCell.style | Should -Match 'fillColor=#f5f5f5'
+        }
+
+        $edge = $xml.SelectSingleNode('//mxCell[@edge="1"]')
+        @($objects.id) | Should -Contain $edge.source
+        @($objects.id) | Should -Contain $edge.target
     }
 }
 

@@ -47,7 +47,7 @@ jobs:
       matrix:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Record PowerShell version
         shell: pwsh
@@ -76,9 +76,11 @@ jobs:
           Import-Module $stageModule -Force
           $cmds = Get-Command -Module NetDiagram-PS | Select-Object -ExpandProperty Name | Sort-Object
           Write-Host "Exported commands: $($cmds -join ', ')"
-          $expected = @('Import-Inventory','Test-DeviceReachability','Invoke-SnmpWalk','Get-SnmpNeighbors','Merge-Edges','Export-DrawIO','Export-Metadata','Compare-NetworkScans')
+          $manifestData = Import-PowerShellDataFile $stageModule
+          $expected = @($manifestData.FunctionsToExport)
+          if ($expected.Count -eq 0) { throw 'Manifest FunctionsToExport is empty or missing' }
           foreach ($e in $expected) { if ($cmds -notcontains $e) { throw "Missing exported command: $e" } }
-          Write-Host "All expected commands present."
+          Write-Host "All $($expected.Count) FunctionsToExport commands present."
 
       - name: Offline inventory-to-diagram smoke (no network)
         shell: pwsh
@@ -130,6 +132,33 @@ jobs:
             $topo2 | ConvertTo-Json -Depth 10 | Out-File -FilePath $currTopo -Encoding utf8
             $diff = Compare-NetworkScans -BaselineMetadata $baselineMeta -BaselineTopology $baselineTopo -CurrentMetadata $currMeta -CurrentTopology $currTopo
             Write-Host "Compare-NetworkScans OK: $($diff | ConvertTo-Json -Depth 5)"
+            # Dual-stack DrawIO: Import-Inventory is IPv4-only; persist via topology JSON.
+            $v6Path = Join-Path $tmp 'smoke-ipv6-topo.json'
+            @{
+              Nodes = @(
+                @{ IP = '2001:db8::10'; Hostname = 'v6-node'; Role = 'switch'; Vendor = 'Cisco'; OS = 'IOS'; Layer = 'Access'; Reachable = $null }
+                @{ IP = '10.0.0.1'; Hostname = 'gw'; Role = 'core-router'; Vendor = 'Cisco'; OS = 'IOS'; Layer = 'Core'; Reachable = $null }
+              )
+              Edges = @()
+              Subnets = @(
+                @{ CIDR = '2001:db8::/32'; Label = 'SmokeV6'; VLAN = 100 }
+                @{ CIDR = '10.0.0.0/24'; Label = 'SmokeNet'; VLAN = 1 }
+              )
+            } | ConvertTo-Json -Depth 10 | Out-File -FilePath $v6Path -Encoding utf8
+            $v6Topo = Import-Topology -Path $v6Path
+            $v6Drawio = Join-Path $tmp 'smoke-ipv6.drawio'
+            $v6Topo | Export-DrawIO -OutFile $v6Drawio
+            if (-not (Test-Path $v6Drawio)) { throw 'Export-DrawIO did not create IPv6 file' }
+            $v6xmlRaw = Get-Content $v6Drawio -Raw
+            if ($v6xmlRaw -notmatch [regex]::Escape('2001:db8::10')) { throw 'Export-DrawIO missing IPv6 address' }
+            $v6xml = [xml]$v6xmlRaw
+            $v6node = $v6xml.SelectSingleNode("//UserObject[@ip='2001:db8::10']")
+            if ($null -eq $v6node) { throw 'Export-DrawIO missing UserObject for IPv6 node' }
+            $v6parent = $v6node.mxCell.parent
+            if ([string]::IsNullOrWhiteSpace($v6parent) -or $v6parent -eq '1') {
+              throw "IPv6 node was not parented into a subnet container (parent='$v6parent')"
+            }
+            Write-Host "Export-DrawIO IPv6 OK: $v6Drawio (parent=$v6parent)"
             # record candidate evidence
             $manifest = Import-PowerShellDataFile $stageModule
             Write-Host "Candidate commit: $env:GITHUB_SHA"

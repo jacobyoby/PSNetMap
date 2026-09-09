@@ -189,7 +189,7 @@ Generated diagrams include:
 - Subnet containers for visual grouping by network segment
 - Color-coded status indicators: green (reachable), red (unreachable), and gray (unknown)
 - Orthogonal connectors with rounded corners
-- Confidence levels: solid green (verified layer 2 SNMP), dashed amber (provisional SNMP hint), and dashed gray (layer 3 inferred)
+- Confidence levels: solid green (verified layer 2 SNMP), solid teal (bridge FDB / L2-FDB), dashed amber (provisional SNMP hint), and dashed gray (layer 3 inferred)
 - Labels that include device names, IP addresses, and connection details
 - Hierarchical layouts that align devices by network layer
 

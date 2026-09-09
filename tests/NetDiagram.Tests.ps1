@@ -350,6 +350,68 @@ Describe 'Export-DrawIO' {
         $content | Should -Match 'target="\d+"'
     }
 
+    It 'Styles L2-FDB edges as solid teal, not the unknown dotted default (#59)' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $topology.Edges = @(
+            [pscustomobject]@{
+                SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'
+                Label = 'FDB'; Source = 'SNMP-FDB'; Confidence = 'L2-FDB'
+            }
+        )
+
+        $drawioPath = Join-Path $script:TestDataPath 'test-l2-fdb-edge.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath
+
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $edge = $xml.SelectSingleNode('//mxCell[@edge="1"]')
+
+        $edge.style | Should -Match 'strokeColor=#0B7285'
+        $edge.style | Should -Match 'strokeWidth=2'
+        $edge.style | Should -Match 'dashed=0'
+        $edge.style | Should -Not -Match 'strokeColor=#999999'
+        $edge.style | Should -Not -Match 'dashPattern=2 2'
+    }
+
+    It 'Keeps L2-SNMP, heuristic, L3, and unknown styles distinct from L2-FDB (#59)' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $topology.Edges = @(
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = 'snmp'; Source = 'SNMP'; Confidence = 'L2-SNMP' }
+            [pscustomobject]@{ SourceIP = '192.168.1.10'; TargetIP = '192.168.1.1'; Label = 'fdb'; Source = 'SNMP-FDB'; Confidence = 'L2-FDB' }
+            [pscustomobject]@{ SourceIP = '192.168.1.10'; TargetIP = '192.168.1.20'; Label = 'hint'; Source = 'SNMP'; Confidence = 'L2-SNMP-Heuristic' }
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.20'; Label = 'l3'; Source = 'Manual'; Confidence = 'L3-Inferred' }
+            [pscustomobject]@{ SourceIP = '192.168.1.20'; TargetIP = '192.168.1.1'; Label = 'unk'; Source = 'Manual'; Confidence = 'Something-Else' }
+        )
+
+        $drawioPath = Join-Path $script:TestDataPath 'test-edge-style-rank.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath
+
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $edges = @($xml.SelectNodes('//mxCell[@edge="1"]'))
+        $edges | Should -HaveCount 5
+
+        $byLabel = @{}
+        foreach ($edge in $edges) {
+            $byLabel[$edge.value] = $edge.style
+        }
+
+        $byLabel['snmp'] | Should -Match 'strokeColor=#2D7600'
+        $byLabel['snmp'] | Should -Not -Match 'dashed=1'
+
+        $byLabel['fdb'] | Should -Match 'strokeColor=#0B7285'
+        $byLabel['fdb'] | Should -Match 'dashed=0'
+        $byLabel['fdb'] | Should -Not -Match 'dashed=1'
+
+        $byLabel['hint'] | Should -Match 'strokeColor=#B26A00'
+        $byLabel['hint'] | Should -Match 'dashed=1'
+
+        $byLabel['l3'] | Should -Match 'strokeColor=#808080'
+        $byLabel['l3'] | Should -Match 'dashed=1'
+
+        $byLabel['unk'] | Should -Match 'strokeColor=#999999'
+        $byLabel['unk'] | Should -Match 'dashed=1'
+        $byLabel['unk'] | Should -Match 'dashPattern=2 2'
+    }
+
     It 'Should skip edges with invalid node IDs' {
         $topology = Import-Inventory -Path $script:TestInventoryPath
         $topology.Edges = @(

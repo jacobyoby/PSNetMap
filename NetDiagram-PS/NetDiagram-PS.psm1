@@ -530,6 +530,8 @@ All SNMP attempts will be logged to verbose output.
 
         $discoveredEdges = [System.Collections.ArrayList]::new()
         $publicAttempts = 0
+        $snmpOutcomes = @{}
+        $snmpCounts = @{ queried = $nodesToQuery.Count; answered = 0; skippedNoCredential = 0; skippedError = 0; skippedNoData = 0 }
 
         foreach ($node in $nodesToQuery) {
             # Resolve SNMP community for this node
@@ -577,17 +579,34 @@ All SNMP attempts will be logged to verbose output.
 
             if ([string]::IsNullOrWhiteSpace($community)) {
                 Write-Warning "No SNMP community found for $($node.IP), skipping"
+                $snmpOutcomes[$node.IP] = 'noCredential'
+                $snmpCounts.skippedNoCredential++
                 continue
             }
 
             # Invoke SNMP walk
             Write-Verbose "  Querying $($node.IP) with community from $source"
-            $output = Invoke-SnmpWalk -TargetIP $node.IP -Community $community -OID $OID -ErrorAction SilentlyContinue
+            $output = $null
+            $snmpError = $null
+            try {
+                $output = Invoke-SnmpWalk -TargetIP $node.IP -Community $community -OID $OID -ErrorAction Stop
+            }
+            catch {
+                $snmpError = $_.Exception.Message
+                Write-Warning "SNMP query failed for $($node.IP): $snmpError"
+                $snmpOutcomes[$node.IP] = 'error'
+                $snmpCounts.skippedError++
+                continue
+            }
 
             if ($null -eq $output -or @($output).Count -eq 0) {
                 Write-Verbose "No SNMP data returned from $($node.IP)"
+                $snmpOutcomes[$node.IP] = 'noData'
+                $snmpCounts.skippedNoData++
                 continue
             }
+            $snmpOutcomes[$node.IP] = 'answered'
+            $snmpCounts.answered++
 
             # Parse LLDP/CDP output. BEST-EFFORT MVP (see function help): we do not fully
             # decode the LLDP MIB rows. For each output line we look only at the VALUE
@@ -643,10 +662,17 @@ All SNMP attempts will be logged to verbose output.
         }
 
         Write-Verbose "Discovered $($discoveredEdges.Count) SNMP edges"
+        $summaryLine = "SNMP summary: queried $($snmpCounts.queried) answered $($snmpCounts.answered) skippedNoCredential $($snmpCounts.skippedNoCredential) skippedError $($snmpCounts.skippedError) skippedNoData $($snmpCounts.skippedNoData)"
+        Write-Host $summaryLine
+        Write-Verbose $summaryLine
 
         if ($TryPublic -and $publicAttempts -gt 0) {
             Write-Warning "Used default 'public' community string on $publicAttempts device(s)"
         }
+
+        # Attach completeness evidence to topology
+        $Topology | Add-Member -NotePropertyName SnmpOutcomes -NotePropertyValue $snmpOutcomes -Force
+        $Topology | Add-Member -NotePropertyName SnmpSummary -NotePropertyValue $snmpCounts -Force
 
         # Merge new edges with existing ones
         $allEdges = @($Topology.Edges) + @($discoveredEdges)
@@ -1242,6 +1268,8 @@ function Export-Metadata {
             }
         }
 
+        $snmpSummary = if ($Topology.PSObject.Properties['SnmpSummary']) { $Topology.SnmpSummary } else { $null }
+        $snmpOutcomes = if ($Topology.PSObject.Properties['SnmpOutcomes']) { $Topology.SnmpOutcomes } else { $null }
         $metadata = [ordered]@{
             scanStarted       = (Get-Date).ToString('o')
             scanFinished      = (Get-Date).ToString('o')
@@ -1250,6 +1278,8 @@ function Export-Metadata {
             confidenceCounts  = $confidenceCounts
             nodeCount         = $Topology.Nodes.Count
             edgeCount         = $Topology.Edges.Count
+            snmpSummary       = $snmpSummary
+            snmpOutcomes      = $snmpOutcomes
         }
 
         try {

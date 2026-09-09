@@ -885,6 +885,30 @@ Describe 'Get-SnmpNeighbors node eligibility' {
         # Only the single reachable/unmarked node should be queried
         Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 1 -Exactly
     }
+
+    It 'Records per-node outcome and summary counts' {
+        $topology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='10.0.0.1'; Reachable=$true }
+                [pscustomobject]@{ IP='10.0.0.2'; Reachable=$true }
+            )
+            Edges=@(); Subnets=@()
+        }
+        Mock Invoke-SnmpWalk {
+            if ($TargetIP -eq '10.0.0.1') { @('1 = IpAddress: 10.0.0.2') } else { throw 'binary missing' }
+        } -ModuleName 'NetDiagram-PS'
+
+        $result = $topology | Get-SnmpNeighbors -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+        $result.SnmpSummary.queried | Should -Be 2
+        $result.SnmpSummary.answered | Should -Be 1
+        $result.SnmpSummary.skippedError | Should -Be 1
+        $result.SnmpOutcomes['10.0.0.1'] | Should -Be 'answered'
+        $result.SnmpOutcomes['10.0.0.2'] | Should -Be 'error'
+        $metaPath = Join-Path $script:TestDataPath 'snmp-meta.json'
+        $result | Export-Metadata -OutFile $metaPath -Force
+        $meta = Get-Content $metaPath -Raw | ConvertFrom-Json
+        $meta.snmpSummary.queried | Should -Be 2
+    }
 }
 
 Describe 'Get-SnmpNeighbors provisional parser confidence (#20 regression)' {

@@ -269,9 +269,16 @@ function Export-DrawIO {
             $edgeStyle += 'labelBackgroundColor=#ffffff;fontSize=11;fontFamily=Helvetica;'
 
             # Different styling based on confidence level
+            # Visual rank matches Merge-Edges: L2-SNMP > L2-FDB > L2-SNMP-Heuristic > L3-Inferred
             if ($confidence -eq 'L2-SNMP') {
-                # L2-SNMP: Solid line, green, thicker (verified connection)
+                # L2-SNMP: Solid line, green, thicker (verified CDP/LLDP)
                 $edgeStyle += 'strokeColor=#2D7600;strokeWidth=2.5;'
+                $edgeStyle += 'endArrow=classic;endFill=1;'
+            }
+            elseif ($confidence -eq 'L2-FDB') {
+                # L2-FDB: Solid teal — verified-ish bridge forwarding table,
+                # distinct from SNMP green and from dashed heuristic/L3 styles.
+                $edgeStyle += 'strokeColor=#0B7285;strokeWidth=2;dashed=0;'
                 $edgeStyle += 'endArrow=classic;endFill=1;'
             }
             elseif ($confidence -eq 'L2-SNMP-Heuristic') {

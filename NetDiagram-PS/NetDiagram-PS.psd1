@@ -31,6 +31,7 @@
         # Export and Analysis
         'Export-DrawIO'
         'Export-Mermaid'
+        'Export-NetBox'
         'Export-Metadata'
         'Export-Topology'
         'Import-Topology'

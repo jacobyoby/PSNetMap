@@ -281,7 +281,13 @@ After importing the module, you have access to:
 | `Get-CommonSNMPStrings` | Suggest likely SNMP community strings |
 | `Merge-Edges` | Combine and deduplicate connections |
 | `Export-DrawIO` | Generate diagram file |
+| `Export-Mermaid` | Generate Mermaid flowchart |
+| `Export-NetBox` | Generate NetBox bulk-import CSV |
+| `Export-Topology` / `Import-Topology` | Persist topology to JSON |
+| `Export-NodeInventoryCsv` | Export inventory CSV |
 | `Export-Metadata` | Save scan statistics |
+| `Import-NmapScan` | Import nmap XML |
+| `Invoke-NetworkDiscovery` | Scan a CIDR without repo clone |
 | `Compare-NetworkScans` | Diff two topology snapshots |
 | `Invoke-SnmpWalk` | Direct SNMP queries |
 
@@ -352,6 +358,20 @@ Check the `examples/` directory:
 - `inventory-template.json` - Template for creating your inventory
 - `credmap.json` - Template for SNMP credentials
 - `New-NetworkDiagram.ps1` - Guided discovery wizard
+
+### NetBox Role Mapping
+
+`Export-NetBox -Site` maps inventory roles to NetBox roles:
+
+| Inventory `Role` | NetBox `role` |
+|---|---|
+| `core-router`, `router` | `router` |
+| `switch`, `distribution` | `switch` |
+| `server` | `server` |
+| `workstation` | `workstation` |
+| *(other)* | `unknown` |
+
+Reachable `true` → `active`, else `offline`; Vendor `Unknown` → empty `manufacturer`.
 
 ---
 

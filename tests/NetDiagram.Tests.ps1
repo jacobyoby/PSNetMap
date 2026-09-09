@@ -59,6 +59,7 @@ Describe 'Module Import' {
         $commandNames | Should -Contain 'Import-Topology'
         $commandNames | Should -Contain 'Export-NodeInventoryCsv'
         $commandNames | Should -Contain 'Export-Mermaid'
+        $commandNames | Should -Contain 'Export-NetBox'
         $commandNames | Should -Contain 'Import-NmapScan'
         $commandNames | Should -Contain 'Compare-NetworkScans'
     }
@@ -1473,6 +1474,47 @@ Describe 'Export-Mermaid (#37 regression)' {
         { $topo | Export-Mermaid -OutFile $path } | Should -Throw "*already exists*Use -Force*"
         $whatIf = Join-Path $script:TestDataPath 'mermaid-whatif.mmd'
         $topo | Export-Mermaid -OutFile $whatIf -WhatIf
+        Test-Path $whatIf | Should -Be $false
+    }
+}
+
+Describe 'Export-NetBox (#38 regression)' {
+    It 'Maps roles, handles Unknown vendor, and escapes commas/quotes' {
+        $topo = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='10.0.0.1'; Hostname='r1'; Role='core-router'; Vendor='Cisco'; OS='IOS'; Layer='Core'; Reachable=$true }
+                [pscustomobject]@{ IP='10.0.0.2'; Hostname='s1'; Role='switch'; Vendor='Unknown'; OS='Unknown'; Layer='Access'; Reachable=$false }
+                [pscustomobject]@{ IP='10.0.0.3'; Hostname='srv,1'; Role='server'; Vendor='Dell'; OS='Ubuntu'; Layer='Servers'; Reachable=$null }
+                [pscustomobject]@{ IP='10.0.0.4'; Hostname='ws1'; Role='workstation'; Vendor='Apple'; OS='macOS'; Layer='Access'; Reachable=$true }
+                [pscustomobject]@{ IP='10.0.0.5'; Hostname='d1'; Role='distribution'; Vendor='HP'; OS='Aruba'; Layer='Dist'; Reachable=$false }
+                [pscustomobject]@{ IP='10.0.0.6'; Hostname='r2'; Role='router'; Vendor='Juniper'; OS='JunOS'; Layer='Core'; Reachable=$null }
+            )
+            Edges=@(); Subnets=@()
+        }
+        $path = Join-Path $script:TestDataPath 'netbox.csv'
+        $topo | Export-NetBox -OutFile $path -Site 'HQ' -Force
+        $header = (Get-Content $path -TotalCount 1) -replace '"',''
+        $header | Should -Be 'name,role,manufacturer,device_type,site,status,primary_ip4'
+        $rows = Import-Csv $path
+        $rows.Count | Should -Be 6
+        ($rows | Where-Object name -eq 'r1').role | Should -Be 'router'
+        ($rows | Where-Object name -eq 's1').manufacturer | Should -Be ''
+        ($rows | Where-Object name -eq 'srv,1').name | Should -Be 'srv,1'
+        ($rows | Where-Object name -eq 'r1').status | Should -Be 'active'
+        ($rows | Where-Object name -eq 's1').status | Should -Be 'offline'
+        ($rows | Where-Object name -eq 'srv,1').status | Should -Be 'offline'
+        ($rows | Where-Object name -eq 'd1').role | Should -Be 'switch'
+        ($rows | Where-Object primary_ip4 -eq '10.0.0.4').role | Should -Be 'workstation'
+    }
+
+    It 'Writes header-only for empty topology and respects -Force/-WhatIf' {
+        $topo = [pscustomobject]@{ Nodes=@(); Edges=@(); Subnets=@() }
+        $path = Join-Path $script:TestDataPath 'netbox-empty.csv'
+        $topo | Export-NetBox -OutFile $path -Site 'HQ' -Force
+        (Get-Content $path | Measure-Object).Count | Should -Be 1
+        { $topo | Export-NetBox -OutFile $path -Site 'HQ' } | Should -Throw "*already exists*Use -Force*"
+        $whatIf = Join-Path $script:TestDataPath 'netbox-whatif.csv'
+        $topo | Export-NetBox -OutFile $whatIf -Site 'HQ' -WhatIf
         Test-Path $whatIf | Should -Be $false
     }
 }

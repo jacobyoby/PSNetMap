@@ -49,12 +49,14 @@ The wizard performs the following actions:
 
 ## Installation
 
-### From PowerShell Gallery (once published)
+### From PowerShell Gallery
 
 ```powershell
 Install-Module -Name NetDiagram-PS -Scope CurrentUser
 Import-Module NetDiagram-PS
 ```
+
+Available at [powershellgallery.com/packages/NetDiagram-PS](https://www.powershellgallery.com/packages/NetDiagram-PS).
 
 ### From source (clone)
 

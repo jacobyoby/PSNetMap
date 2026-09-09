@@ -75,6 +75,9 @@ Notes:
 - The manifest's `PrivateData.PSData` already supplies `Tags`, `LicenseUri`,
   `ProjectUri`, and `ReleaseNotes`, which populate the Gallery listing.
 - After publishing, confirm with `Find-Module NetDiagram-PS`.
+- Use `Publish-Module` (PowerShellGet). Do not use `Publish-PSResource`; an empty
+  `IconUri` in the manifest blocks `Publish-PSResource` validation, which is why
+  commit `4a027ff` removed it.
 
 ## 6. Tag the release
 

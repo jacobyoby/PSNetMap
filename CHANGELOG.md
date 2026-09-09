@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-09
+
 ### Added
 - **Per-function module split.** `NetDiagram-PS.psm1` is a loader that
   dot-sources `Private/` then `Public/` (one function per file). See
@@ -250,5 +252,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.0.0]: https://github.com/jacobyoby/PSNetMap/releases/tag/v1.0.0
 [1.1.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.1.0...v1.2.0
-[unreleased]: https://github.com/jacobyoby/PSNetMap/compare/v1.3.0...HEAD
+[unreleased]: https://github.com/jacobyoby/PSNetMap/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.2.0...v1.3.0

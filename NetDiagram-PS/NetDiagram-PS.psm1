@@ -13,7 +13,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Module-level variables
-$script:ModuleVersion = '1.3.0'
+$script:ModuleVersion = '1.4.0'
 
 # Dot-source private helpers first (so public functions can call them),
 # then public commands.

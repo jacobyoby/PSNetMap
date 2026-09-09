@@ -8,11 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Per-function module split.** `NetDiagram-PS.psm1` is a loader that
+  dot-sources `Private/` then `Public/` (one function per file). See
+  [STRUCTURE.md](STRUCTURE.md).
+- **`Invoke-NetworkDiscovery`.** Enumerate an IPv4 CIDR (Quick/Medium/Full,
+  /22 cap) and return a topology after `Install-Module` without a repo clone.
+- **`Import-NmapScan`.** Ingest nmap `-oX` XML; up hosts become nodes.
 - **`Import-NmapScan` imports IPv6 hosts.** nmap `-oX` `address` elements with
   `addrtype='ipv6'` are accepted when a host has no IPv4 address. Dual-stack
   hosts keep a single node identity: IPv4 is preferred when both families are
   present. Addresses are parsed with `[System.Net.IPAddress]::Parse` and stored
   in canonical form; malformed addresses are skipped (same as invalid IPv4).
+- **`Export-Mermaid`.** Flowchart LR with subnet subgraphs; L2 solid,
+  L3-Inferred dotted.
+- **`Export-NetBox`.** Devices CSV for NetBox bulk import (`-Site`,
+  role/status mapping).
+- **`Export-NodeInventoryCsv`.** Flat node inventory CSV.
+- **`Export-Topology` / `Import-Topology`.** JSON round-trip of Nodes,
+  Edges, and Subnets.
+- **`Get-SnmpBridgeNeighbors`.** Walks BRIDGE-MIB `dot1dTpFdbTable` and
+  emits `L2-FDB` edges (ranked between L2-SNMP and L3-Inferred) for MACs
+  that resolve via the local ARP table.
+- **IPv6 in subnet matching, ARP, and DrawIO.** `Test-IPInSubnet`,
+  `Get-LocalARPTable` / `ConvertFrom-ArpText`, and subnet parenting accept
+  IPv6. Mixed-family placement is a non-match (no throw).
+- **`Get-MACVendor -OuiDatabasePath`.** Optional IEEE `oui.csv` for full
+  OUI coverage (built-in table remains a 31-prefix sample).
 
 ### Changed
 - **`Import-Inventory` accepts dual-stack addresses.** Device `ip` and subnet
@@ -21,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string. Each device still has a single identity address; prefer IPv4 when a
   dual-stack host needs only one row. Discovery (`Invoke-NetworkDiscovery`)
   remains IPv4-only.
+- **Reachability is tri-state.** `Test-DeviceReachability` records `$true` /
+  `$false` / `$null` (indeterminate, e.g. local send failure). Optional
+  `-TcpFallbackPort` can promote ICMP-silent hosts. DrawIO paints unknown gray.
+- **Packaged CI smoke** imports every `FunctionsToExport` entry, uses
+  `actions/checkout@v7`, and asserts offline dual-stack DrawIO parenting.
 
 ### Fixed
 - **`Export-DrawIO` L2-FDB edge style.** Bridge forwarding-table edges (`Confidence='L2-FDB'`)
@@ -31,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local send failure stays `$null` (Unknown) rather than being painted
   Unreachable. Optional `-TcpFallbackPort` is forwarded to the same helper.
   The step-[4/5] summary reports reachable, unreachable, and unknown counts.
+- **`Compare-NetworkScans` respects incomplete SNMP.** Nodes skipped because
+  the current snapshot’s SNMP outcome is `noCredential` or `error` are not
+  reported as Removed.
+- **SNMP per-node outcomes.** `Get-SnmpNeighbors` records
+  answered/noCredential/error/noData per queried node; `Export-Metadata`
+  persists `snmpSummary` / `snmpOutcomes`.
+- **`Export-DrawIO` / `Export-Metadata` require `-Force` to overwrite.**
 
 ## [1.3.0] - 2026-07-30
 
@@ -198,4 +231,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.0.0]: https://github.com/jacobyoby/PSNetMap/releases/tag/v1.0.0
 [1.1.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.1.0...v1.2.0
+[unreleased]: https://github.com/jacobyoby/PSNetMap/compare/v1.3.0...HEAD
 [1.3.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.2.0...v1.3.0

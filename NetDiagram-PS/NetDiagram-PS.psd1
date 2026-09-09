@@ -46,10 +46,10 @@
 
     PrivateData = @{
         PSData = @{
-            Tags = @('Network', 'Discovery', 'Diagram', 'SNMP', 'DrawIO', 'Topology', 'NetworkMapping', 'Cisco', 'LLDP', 'Visualization')
+            Tags = @('Network', 'Discovery', 'Diagram', 'SNMP', 'DrawIO', 'Topology', 'NetworkMapping', 'Cisco', 'LLDP', 'IPv6', 'Visualization')
             LicenseUri = 'https://github.com/jacobyoby/PSNetMap/blob/main/LICENSE'
             ProjectUri = 'https://github.com/jacobyoby/PSNetMap'
-            ReleaseNotes = 'Version 1.3.0 - Code-review hardening. Get-SnmpNeighbors now queries untested nodes by default (Reachable = $null), fixing the import-then-discover workflow, with an -OnlyReachable opt-in switch. Invoke-SnmpWalk redacts the community string from verbose output, validates all parameters (SNMP version set, IP/FQDN, OID format, argument-injection guard), restricts binary resolution to Application, and documents process-list exposure. LLDP/CDP parsing hardened (value-only, octet-validated, Hex-STRING aware) and clearly documented as best-effort. Export-DrawIO de-duplicates node IPs and parents nodes into their matching subnet containers. Invoke-PortScan validates port/timeout ranges and drops TCP 161 (SNMP is UDP). Resolve-IPHostname now honors -TimeoutSeconds via async DNS. Example wizard uses real CIDR host enumeration (with a /22 scan cap) instead of assuming /24.'
+            ReleaseNotes = 'Unreleased (post-1.3.0). Module split into Public/Private loader files. IPv6 subnet matching, ARP discovery, DrawIO parenting, and dual-stack Import-Inventory. Import-NmapScan accepts IPv6-only nmap hosts (IPv4 preferred on dual-stack). Get-SnmpBridgeNeighbors walks BRIDGE-MIB forwarding tables and emits L2-FDB edges. New commands: Invoke-NetworkDiscovery, Import-NmapScan, Export-Mermaid, Export-NetBox, Export-NodeInventoryCsv, Export-Topology, Import-Topology. Test-DeviceReachability is tri-state ($true/$false/$null) with optional TCP fallback; the wizard uses the same helper. Packaged CI smoke checks FunctionsToExport and offline IPv6 DrawIO parenting.'
         }
     }
 }

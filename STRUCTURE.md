@@ -53,6 +53,7 @@ NetDiagram-PS/
     ├── Get-CommonSNMPStrings.ps1
     ├── Get-LocalARPTable.ps1
     ├── Get-MACVendor.ps1
+    ├── Get-SnmpBridgeNeighbors.ps1
     ├── Get-SnmpNeighbors.ps1
     ├── Import-Inventory.ps1
     ├── Import-NmapScan.ps1

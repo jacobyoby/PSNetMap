@@ -122,13 +122,15 @@ Set-Secret -Name 'MySNMPCommunity' -Secret 'public'
 # 3. Discover topology with SNMP
 $topo = Import-Inventory -Path '.\my-inventory.json'
 $topo = $topo | Get-SnmpNeighbors -CredentialMapPath '.\my-credmap.json'
+$topo = $topo | Get-SnmpBridgeNeighbors -CredentialMapPath '.\my-credmap.json'
 $topo | Export-DrawIO -OutFile '.\network.drawio'
 ```
 
-> **Note:** `Get-SnmpNeighbors` queries every imported node by default (nodes whose
-> reachability has not been tested are still queried), so the workflow above runs end to
-> end without a separate reachability pass. Add `-OnlyReachable` (after piping through
-> `Test-DeviceReachability`) to query only nodes that answered a ping.
+> **Note:** `Get-SnmpNeighbors` and `Get-SnmpBridgeNeighbors` query every imported node
+> by default (nodes whose reachability has not been tested are still queried), so the
+> workflow above runs end to end without a separate reachability pass. Add
+> `-OnlyReachable` (after piping through `Test-DeviceReachability`) to query only nodes
+> that answered a ping. Bridge FDB links are labeled `L2-FDB` and drawn as solid teal.
 >
 > **LLDP/CDP parsing is best-effort (MVP):** it extracts typed management-address values
 > from `snmpwalk` output and links them to known nodes, but does not fully decode the
@@ -247,7 +249,9 @@ PSNetMap/
 ├── README.md                       # Main documentation and conventions
 ├── NetDiagram-PS/
 │   ├── NetDiagram-PS.psd1          # Module manifest
-│   └── NetDiagram-PS.psm1          # Module implementation
+│   ├── NetDiagram-PS.psm1          # Loader (dot-sources Private/ then Public/)
+│   ├── Private/                    # Internal helpers (not exported)
+│   └── Public/                     # Exported commands (one file per function)
 ├── examples/
 │   ├── New-NetworkDiagram.ps1      # Guided discovery wizard
 │   ├── credmap.json                # SNMP credential-map template
@@ -256,8 +260,9 @@ PSNetMap/
     └── NetDiagram.Tests.ps1        # Pester test suite
 ```
 
-This is the single maintained repository-layout reference. Update it when tracked
-top-level files or test entry points change.
+This tree is the top-level layout. Per-file module contents and loader
+conventions live in [STRUCTURE.md](STRUCTURE.md). Update both when tracked
+top-level files, Public/Private files, or test entry points change.
 
 ### Keep generated network data outside the clone
 
@@ -298,7 +303,8 @@ After importing the module, you have access to:
 | `Resolve-IPHostname` | Perform reverse DNS lookups |
 | `Get-MACVendor` | Look up vendors for MAC addresses |
 | `Invoke-PortScan` | Check TCP ports with optional banner grabbing |
-| `Get-SnmpNeighbors` | Discover connections via SNMP |
+| `Get-SnmpNeighbors` | Discover connections via SNMP (LLDP/CDP) |
+| `Get-SnmpBridgeNeighbors` | Discover L2-FDB edges from switch forwarding tables |
 | `Get-CommonSNMPStrings` | Suggest likely SNMP community strings |
 | `Merge-Edges` | Combine and deduplicate connections |
 | `Export-DrawIO` | Generate diagram file |

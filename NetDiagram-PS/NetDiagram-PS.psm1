@@ -413,7 +413,9 @@ function Get-SnmpNeighbors {
     .DESCRIPTION
         Queries nodes for LLDP neighbor information via SNMP.
         Uses credential map to resolve community strings from SecretManagement.
-        Adds discovered edges to the topology with L2-SNMP confidence.
+        Adds discovered edges with provisional L2-SNMP-Heuristic confidence. The parser
+        does not assign verified L2-SNMP confidence because it does not fully correlate
+        structured LLDP/CDP table rows.
 
         CREDENTIAL MATCHING: The most specific matching IPv4 CIDR wins regardless of
         JSON property order. Default is used only when no CIDR matches. If the selected
@@ -599,12 +601,12 @@ All SNMP attempts will be logged to verbose output.
 
                 $targetIP = $null
 
-                # net-snmp renders an LLDP management address either as a dotted quad
-                # (sometimes prefixed 'IpAddress:') or as a 4-octet Hex-STRING.
-                if ($value -match '(?:IpAddress:\s*)?\b((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\b') {
+                # Only typed address values are eligible. Arbitrary STRING values can
+                # contain known IPs but are not evidence of a neighbor relationship.
+                if ($value -match '^IpAddress:\s*((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\s*$') {
                     $targetIP = $matches[1]
                 }
-                elseif ($value -match 'Hex-STRING:\s*([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})') {
+                elseif ($value -match '^Hex-STRING:\s*([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})\s*$') {
                     $targetIP = @(
                         [Convert]::ToInt32($matches[1], 16)
                         [Convert]::ToInt32($matches[2], 16)
@@ -633,7 +635,7 @@ All SNMP attempts will be logged to verbose output.
                     TargetIP   = $targetIP
                     Label      = $label
                     Source     = 'SNMP'
-                    Confidence = 'L2-SNMP'
+                    Confidence = 'L2-SNMP-Heuristic'
                 }
 
                 $null = $discoveredEdges.Add($edge)
@@ -774,7 +776,8 @@ function Merge-Edges {
         Merges and deduplicates edge candidates
     .DESCRIPTION
         Deduplicates edges using sorted endpoints as key.
-        Prioritizes L2-SNMP confidence over L3-Inferred.
+        Prioritizes verified L2-SNMP, then provisional L2-SNMP-Heuristic, then
+        L3-Inferred. An SNMP source alone never promotes an edge to verified.
         Keeps first non-empty label.
     .PARAMETER Edges
         Array of edge objects to merge
@@ -809,13 +812,30 @@ function Merge-Edges {
         $endpoints = @($edge.SourceIP, $edge.TargetIP) | Sort-Object
         $key = "$($endpoints[0])|$($endpoints[1])"
 
+        $incomingConfidence = if ($edge.PSObject.Properties['Confidence']) {
+            $edge.Confidence
+        }
+        elseif ($edge.PSObject.Properties['Source'] -and $edge.Source -eq 'SNMP') {
+            'L2-SNMP-Heuristic'
+        }
+        else {
+            'L3-Inferred'
+        }
+
+        $confidenceRank = @{
+            'L3-Inferred' = 1
+            'L2-SNMP-Heuristic' = 2
+            'L2-SNMP' = 3
+        }
+
         if ($edgeMap.Contains($key)) {
             $existing = $edgeMap[$key]
 
-            # Prioritize L2-SNMP confidence
-            if ($edge.Source -eq 'SNMP' -and $existing.Source -ne 'SNMP') {
-                $existing.Source = 'SNMP'
-                $existing.Confidence = 'L2-SNMP'
+            $existingRank = if ($confidenceRank.ContainsKey($existing.Confidence)) { $confidenceRank[$existing.Confidence] } else { 0 }
+            $incomingRank = if ($confidenceRank.ContainsKey($incomingConfidence)) { $confidenceRank[$incomingConfidence] } else { 0 }
+            if ($incomingRank -gt $existingRank) {
+                $existing.Source = if ($edge.PSObject.Properties['Source']) { $edge.Source } else { 'Unknown' }
+                $existing.Confidence = $incomingConfidence
             }
 
             # Keep first non-empty label
@@ -825,22 +845,12 @@ function Merge-Edges {
         }
         else {
             # Add new edge with confidence
-            $confidence = if ($edge.PSObject.Properties['Confidence']) {
-                $edge.Confidence
-            }
-            elseif ($edge.Source -eq 'SNMP') {
-                'L2-SNMP'
-            }
-            else {
-                'L3-Inferred'
-            }
-
             $edgeMap[$key] = [pscustomobject]@{
                 SourceIP   = $edge.SourceIP
                 TargetIP   = $edge.TargetIP
                 Label      = if ($edge.PSObject.Properties['Label']) { $edge.Label } else { '' }
                 Source     = if ($edge.PSObject.Properties['Source']) { $edge.Source } else { 'Unknown' }
-                Confidence = $confidence
+                Confidence = $incomingConfidence
             }
         }
     }
@@ -1117,6 +1127,12 @@ function Export-DrawIO {
                 # L2-SNMP: Solid line, green, thicker (verified connection)
                 $edgeStyle += 'strokeColor=#2D7600;strokeWidth=2.5;'
                 $edgeStyle += 'endArrow=classic;endFill=1;'
+            }
+            elseif ($confidence -eq 'L2-SNMP-Heuristic') {
+                # Provisional SNMP hint: amber and dashed, visually distinct from
+                # verified physical topology.
+                $edgeStyle += 'strokeColor=#B26A00;strokeWidth=2;dashed=1;dashPattern=8 4;'
+                $edgeStyle += 'endArrow=classic;endFill=0;'
             }
             elseif ($confidence -eq 'L3-Inferred') {
                 # L3-Inferred: Dashed line, gray (inferred connection)

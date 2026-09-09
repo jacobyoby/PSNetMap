@@ -85,5 +85,9 @@ function Merge-Edges {
         }
     }
 
+    if ($edgeMap.Count -eq 0) {
+        return @()
+    }
+
     return @($edgeMap.Values)
 }

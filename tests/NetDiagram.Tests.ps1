@@ -657,6 +657,7 @@ Describe 'Get-SnmpBridgeNeighbors (#39 regression)' {
         }
 
         Mock Invoke-SnmpWalk {
+            if ($TargetIP -ne '10.0.0.1') { return @() }
             if ($OID -eq '1.3.6.1.2.1.17.4.3.1.1') { return $addressLines }
             if ($OID -eq '1.3.6.1.2.1.17.4.3.1.2') { return $portLines }
             if ($OID -eq '1.3.6.1.2.1.17.4.3.1.3') { return $statusLines }
@@ -705,6 +706,7 @@ Describe 'Get-SnmpBridgeNeighbors (#39 regression)' {
         }
 
         Mock Invoke-SnmpWalk {
+            if ($TargetIP -ne '10.0.0.1') { return @() }
             if ($OID -eq '1.3.6.1.2.1.17.4.3.1.1') { return $addressLines }
             if ($OID -eq '1.3.6.1.2.1.17.4.3.1.2') { return $portLines }
             if ($OID -eq '1.3.6.1.2.1.17.4.3.1.3') { return $statusLines }

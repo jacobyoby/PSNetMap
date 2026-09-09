@@ -259,9 +259,15 @@ function Get-SnmpBridgeNeighbors {
 
         Write-Verbose "Discovered $($discoveredEdges.Count) bridge-FDB edges"
 
-        # Merge new edges with existing ones
-        $allEdges = @($Topology.Edges) + @($discoveredEdges)
-        $Topology.Edges = Merge-Edges -Edges $allEdges
+        # Merge new edges with existing ones. Filter nulls so an empty pscustomobject
+        # Edges property (which PowerShell unwraps to $null) does not become @($null).
+        $existingEdges = @($Topology.Edges | Where-Object { $null -ne $_ })
+        if ($existingEdges.Count -eq 0 -and $discoveredEdges.Count -eq 0) {
+            $Topology.Edges = @()
+            return $Topology
+        }
+
+        $Topology.Edges = Merge-Edges -Edges ($existingEdges + @($discoveredEdges))
 
         return $Topology
     }

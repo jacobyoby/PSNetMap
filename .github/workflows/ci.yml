@@ -16,7 +16,12 @@ jobs:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      - name: Validate POSIX runner contract
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./tests/test-runner-contract.sh
 
       - name: Validate module manifest
         shell: pwsh
@@ -26,20 +31,120 @@ jobs:
         shell: pwsh
         run: Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -Scope CurrentUser -SkipPublisherCheck
 
+      - name: Record PowerShell version
+        shell: pwsh
+        run: $PSVersionTable | Format-Table -AutoSize; $PSVersionTable.PSVersion.ToString()
+
       - name: Run Pester tests
         shell: pwsh
+        run: ./tests/run-tests.ps1
+
+  smoke:
+    name: Packaged smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record PowerShell version
+        shell: pwsh
+        run: $PSVersionTable | Format-Table -AutoSize
+
+      - name: Stage candidate package in isolation
+        shell: pwsh
         run: |
-          $config = New-PesterConfiguration
-          $config.Run.Path = './tests/NetDiagram.Tests.ps1'
-          $config.Output.Verbosity = 'Detailed'
-          $config.Run.Exit = $true
-          Invoke-Pester -Configuration $config
+          $ErrorActionPreference = 'Stop'
+          $manifest = Join-Path $PWD 'NetDiagram-PS' 'NetDiagram-PS.psd1'
+          Test-ModuleManifest $manifest | Out-String | Write-Host
+          $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("NetDiagram-PS-smoke-" + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item -Recurse -Force (Join-Path $PWD 'NetDiagram-PS') (Join-Path $stage 'NetDiagram-PS')
+          # keep staged path for next steps
+          "STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Staged to $stage"
+          Get-ChildItem $stage -Recurse | Format-Table -AutoSize | Out-String | Write-Host
+
+      - name: Install and import from staged path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stageModule = Join-Path $env:STAGE 'NetDiagram-PS' 'NetDiagram-PS.psd1'
+          Test-ModuleManifest $stageModule | Out-String | Write-Host
+          Import-Module $stageModule -Force
+          $cmds = Get-Command -Module NetDiagram-PS | Select-Object -ExpandProperty Name | Sort-Object
+          Write-Host "Exported commands: $($cmds -join ', ')"
+          $expected = @('Import-Inventory','Test-DeviceReachability','Invoke-SnmpWalk','Get-SnmpNeighbors','Merge-Edges','Export-DrawIO','Export-Metadata','Compare-NetworkScans')
+          foreach ($e in $expected) { if ($cmds -notcontains $e) { throw "Missing exported command: $e" } }
+          Write-Host "All expected commands present."
+
+      - name: Offline inventory-to-diagram smoke (no network)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stageModule = Join-Path $env:STAGE 'NetDiagram-PS' 'NetDiagram-PS.psd1'
+          Import-Module $stageModule -Force
+          $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("psnetmap-smoke-" + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+          try {
+            $inv = @{
+              knownDevices = @(
+                @{ ip='10.0.0.1'; hostname='gw'; role='core-router'; vendor='Cisco' }
+                @{ ip='10.0.0.10'; hostname='sw1'; role='switch'; vendor='Cisco' }
+              )
+              subnets = @(@{ cidr='10.0.0.0/24'; label='SmokeNet'; vlan=1 })
+            }
+            $invPath = Join-Path $tmp 'inventory.json'
+            $inv | ConvertTo-Json -Depth 10 | Out-File -FilePath $invPath -Encoding utf8
+            $topo = Import-Inventory -Path $invPath
+            if ($topo.Nodes.Count -ne 2) { throw "Expected 2 nodes, got $($topo.Nodes.Count)" }
+            $drawio = Join-Path $tmp 'smoke.drawio'
+            $topo | Export-DrawIO -OutFile $drawio
+            if (-not (Test-Path $drawio)) { throw "Export-DrawIO did not create file" }
+            $xml = Get-Content $drawio -Raw
+            if ($xml -notmatch '10\.0\.0\.1' -or $xml -notmatch '10\.0\.0\.10') { throw "Export-DrawIO missing expected IPs" }
+            Write-Host "Export-DrawIO OK: $drawio ($((Get-Item $drawio).Length) bytes)"
+            $meta = Join-Path $tmp 'smoke-meta.json'
+            $topo | Export-Metadata -OutFile $meta -CredSetsUsed @('SmokeCred')
+            if (-not (Test-Path $meta)) { throw "Export-Metadata did not create file" }
+            $baselineMeta = $meta
+            $baselineTopo = Join-Path $tmp 'smoke-topo.json'
+            $topo | ConvertTo-Json -Depth 10 | Out-File -FilePath $baselineTopo -Encoding utf8
+            # second scan with one extra node
+            $inv2 = @{
+              knownDevices = @(
+                @{ ip='10.0.0.1'; hostname='gw'; role='core-router'; vendor='Cisco' }
+                @{ ip='10.0.0.10'; hostname='sw1'; role='switch'; vendor='Cisco' }
+                @{ ip='10.0.0.11'; hostname='srv1'; role='server'; vendor='Dell' }
+              )
+              subnets = @(@{ cidr='10.0.0.0/24'; label='SmokeNet'; vlan=1 })
+            }
+            $inv2Path = Join-Path $tmp 'inventory2.json'
+            $inv2 | ConvertTo-Json -Depth 10 | Out-File -FilePath $inv2Path -Encoding utf8
+            $topo2 = Import-Inventory -Path $inv2Path
+            $currMeta = Join-Path $tmp 'smoke-meta2.json'
+            $currTopo = Join-Path $tmp 'smoke-topo2.json'
+            $topo2 | Export-Metadata -OutFile $currMeta -CredSetsUsed @('SmokeCred')
+            $topo2 | ConvertTo-Json -Depth 10 | Out-File -FilePath $currTopo -Encoding utf8
+            $diff = Compare-NetworkScans -BaselineMetadata $baselineMeta -BaselineTopology $baselineTopo -CurrentMetadata $currMeta -CurrentTopology $currTopo
+            Write-Host "Compare-NetworkScans OK: $($diff | ConvertTo-Json -Depth 5)"
+            # record candidate evidence
+            $manifest = Import-PowerShellDataFile $stageModule
+            Write-Host "Candidate commit: $env:GITHUB_SHA"
+            Write-Host "Package version: $($manifest.ModuleVersion)"
+            Write-Host "Package hash (staged folder): $((Get-FileHash $stageModule -Algorithm SHA256).Hash)"
+          } finally {
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force $env:STAGE -ErrorAction SilentlyContinue
+          }
 
   lint:
     name: PSScriptAnalyzer
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install PSScriptAnalyzer
         shell: pwsh

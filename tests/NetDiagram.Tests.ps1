@@ -55,6 +55,8 @@ Describe 'Module Import' {
         $commandNames | Should -Contain 'Merge-Edges'
         $commandNames | Should -Contain 'Export-DrawIO'
         $commandNames | Should -Contain 'Export-Metadata'
+        $commandNames | Should -Contain 'Export-Topology'
+        $commandNames | Should -Contain 'Import-Topology'
         $commandNames | Should -Contain 'Compare-NetworkScans'
     }
 }
@@ -90,6 +92,61 @@ Describe 'Import-Inventory' {
 
     It 'Should throw error for missing file' {
         { Import-Inventory -Path 'C:\NonExistent\file.json' } | Should -Throw
+    }
+
+    It 'Accepts a valid empty inventory' {
+        $path = Join-Path $TestDrive 'empty-inventory.json'
+        '{"knownDevices":[],"subnets":[]}' | Set-Content -Path $path
+
+        $topology = Import-Inventory -Path $path
+        $topology.Nodes | Should -HaveCount 0
+        $topology.Subnets | Should -HaveCount 0
+    }
+
+    It 'Rejects a non-array knownDevices shape' {
+        $path = Join-Path $TestDrive 'bad-device-shape.json'
+        '{"knownDevices":{"ip":"192.168.1.2"}}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw "*'knownDevices' must be an array*"
+    }
+
+    It 'Rejects an invalid IPv4 octet and identifies its entry' {
+        $path = Join-Path $TestDrive 'bad-ip.json'
+        '{"knownDevices":[{"ip":"192.168.999.2"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*knownDevices*0*ip*'
+    }
+
+    It 'Rejects IPv6 explicitly' {
+        $path = Join-Path $TestDrive 'ipv6.json'
+        '{"knownDevices":[{"ip":"2001:db8::1"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*IPv6 is not supported*'
+    }
+
+    It 'Rejects duplicate normalized device addresses' {
+        $path = Join-Path $TestDrive 'duplicate-ip.json'
+        '{"knownDevices":[{"ip":"192.168.1.2"},{"ip":"192.168.1.2"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*duplicate device address*'
+    }
+
+    It 'Rejects an invalid subnet prefix and identifies its entry' {
+        $path = Join-Path $TestDrive 'bad-prefix.json'
+        '{"knownDevices":[],"subnets":[{"cidr":"192.168.1.0/33"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*subnets*0*cidr*'
+    }
+
+    It 'Normalizes subnet host bits and maps an unknown role to Access' {
+        $path = Join-Path $TestDrive 'normalized.json'
+        '{"knownDevices":[{"ip":"192.168.1.42","role":"printer"}],"subnets":[{"cidr":"192.168.1.42/24"}]}' | Set-Content -Path $path
+
+        $topology = Import-Inventory -Path $path
+        $topology.Nodes[0].IP | Should -Be '192.168.1.42'
+        $topology.Nodes[0].Role | Should -Be 'printer'
+        $topology.Nodes[0].Layer | Should -Be 'Access'
+        $topology.Subnets[0].CIDR | Should -Be '192.168.1.0/24'
     }
 }
 
@@ -143,6 +200,18 @@ Describe 'Merge-Edges' {
         $merged = Merge-Edges -Edges $edges
         $merged | Should -HaveCount 1
         $merged[0].Confidence | Should -Be 'L2-SNMP'
+    }
+
+    It 'Does not promote a provisional SNMP hint to verified confidence' {
+        $edges = @(
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = 'Inferred'; Source = 'Manual'; Confidence = 'L3-Inferred' }
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = 'Hint'; Source = 'SNMP'; Confidence = 'L2-SNMP-Heuristic' }
+        )
+
+        $merged = Merge-Edges -Edges $edges
+        $merged | Should -HaveCount 1
+        $merged[0].Confidence | Should -Be 'L2-SNMP-Heuristic'
+        $merged[0].Confidence | Should -Not -Be 'L2-SNMP'
     }
 
     It 'Should keep first non-empty label' {
@@ -350,6 +419,57 @@ Describe 'Round-trip Test' {
     }
 }
 
+Describe 'Topology persistence (#34 regression)' {
+    It 'Round-trips a topology with nodes, subnets and merged edges' {
+        $topo = Import-Inventory -Path $script:TestInventoryPath
+        $topo.Edges = Merge-Edges -Edges @(
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = 'uplink'; Source = 'Manual'; Confidence = 'L3-Inferred' }
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = ''; Source = 'SNMP'; Confidence = 'L2-SNMP-Heuristic' }
+        )
+        $path = Join-Path $script:TestDataPath 'topo-roundtrip.json'
+        $topo | Export-Topology -OutFile $path -Force
+        $reloaded = Import-Topology -Path $path
+        $reloaded.Nodes.Count | Should -Be $topo.Nodes.Count
+        $reloaded.Edges.Count | Should -Be $topo.Edges.Count
+        $reloaded.Subnets.Count | Should -Be $topo.Subnets.Count
+        foreach ($n in $topo.Nodes) {
+            $m = $reloaded.Nodes | Where-Object { $_.IP -eq $n.IP }
+            $m | Should -Not -BeNullOrEmpty
+            $m.Hostname | Should -Be $n.Hostname
+            $m.Reachable | Should -Be $n.Reachable
+            $m.Layer | Should -Be $n.Layer
+        }
+    }
+
+    It 'Preserves edges nested three levels deep' {
+        $topo = [pscustomobject]@{
+            Nodes = @([pscustomobject]@{ IP = '10.0.0.1'; Hostname = 'a'; Role = 'switch'; Vendor = 'X'; OS = 'X'; Layer = 'Access'; Reachable = $true })
+            Edges = @([pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'x'; Source = 'Manual'; Confidence = 'L3-Inferred'; Details = [pscustomobject]@{ Level1 = [pscustomobject]@{ Level2 = [pscustomobject]@{ Level3 = 'deep-value' } } } })
+            Subnets = @()
+        }
+        $path = Join-Path $script:TestDataPath 'topo-deep.json'
+        $topo | Export-Topology -OutFile $path -Force
+        $reloaded = Import-Topology -Path $path
+        $reloaded.Edges[0].Details.Level1.Level2.Level3 | Should -Be 'deep-value'
+    }
+
+    It 'Throws when imported file is missing Nodes' {
+        $badPath = Join-Path $script:TestDataPath 'topo-bad.json'
+        @{ Edges = @(); Subnets = @() } | ConvertTo-Json -Depth 5 | Out-File -FilePath $badPath -Force
+        { Import-Topology -Path $badPath } | Should -Throw "*missing*Nodes*"
+    }
+
+    It 'Refuses to overwrite without -Force and honors -WhatIf' {
+        $topo = Import-Inventory -Path $script:TestInventoryPath
+        $path = Join-Path $script:TestDataPath 'topo-force.json'
+        $topo | Export-Topology -OutFile $path -Force
+        { $topo | Export-Topology -OutFile $path } | Should -Throw "*already exists*Use -Force*"
+        $whatIfPath = Join-Path $script:TestDataPath 'topo-whatif.json'
+        $topo | Export-Topology -OutFile $whatIfPath -WhatIf
+        Test-Path $whatIfPath | Should -Be $false
+    }
+}
+
 Describe 'Defensive Coding Tests' {
     It 'Should handle null topology gracefully in Export-DrawIO' {
         $nullTopo = [pscustomobject]@{
@@ -386,6 +506,117 @@ Describe 'Defensive Coding Tests' {
         'This is not valid JSON' | Out-File -FilePath $badJsonPath -Force
 
         { Import-Inventory -Path $badJsonPath } | Should -Throw
+    }
+}
+
+Describe 'Get-LocalARPTable parsing (#13 regression)' {
+    It 'Parses macOS arp output and filters by interface' {
+        InModuleScope 'NetDiagram-PS' {
+            $lines = @(
+                '? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]'
+                '? (192.168.1.2) at 11:22:33:44:55:66 on bridge0 ifscope [ethernet]'
+                '? (192.168.1.3) at (incomplete) on en0 ifscope [ethernet]'
+            )
+
+            $result = @(ConvertFrom-ArpText -Lines $lines -Format MacOS -InterfaceAlias 'en0')
+            $result | Should -HaveCount 1
+            $result[0].IPAddress | Should -Be '192.168.1.1'
+            $result[0].MACAddress | Should -Be 'AA:BB:CC:DD:EE:FF'
+            $result[0].InterfaceAlias | Should -Be 'en0'
+        }
+    }
+
+    It 'Parses Linux ip-neigh output including dotted interface names' {
+        InModuleScope 'NetDiagram-PS' {
+            $lines = @(
+                '192.168.1.1 dev eth0.20 lladdr aa:bb:cc:dd:ee:ff REACHABLE'
+                '192.168.1.2 dev eth0 lladdr 11:22:33:44:55:66 STALE'
+                '192.168.1.3 dev eth0 FAILED'
+            )
+
+            $result = @(ConvertFrom-ArpText -Lines $lines -Format LinuxIp -InterfaceAlias 'eth0.20')
+            $result | Should -HaveCount 1
+            $result[0].IPAddress | Should -Be '192.168.1.1'
+            $result[0].State | Should -Be 'REACHABLE'
+            $result[0].InterfaceAlias | Should -Be 'eth0.20'
+        }
+    }
+
+    It 'Parses Linux arp fallback output' {
+        InModuleScope 'NetDiagram-PS' {
+            $lines = @('? (10.0.0.1) at de:ad:be:ef:00:01 [ether] on eth0')
+            $result = @(ConvertFrom-ArpText -Lines $lines -Format LinuxArp)
+
+            $result | Should -HaveCount 1
+            $result[0].IPAddress | Should -Be '10.0.0.1'
+            $result[0].MACAddress | Should -Be 'DE:AD:BE:EF:00:01'
+        }
+    }
+
+    It 'Surfaces a candidate line that no longer matches the expected format' {
+        InModuleScope 'NetDiagram-PS' {
+            { ConvertFrom-ArpText -Lines @('192.168.1.1 dev eth0 lladdr malformed REACHABLE') -Format LinuxIp } |
+                Should -Throw '*Unable to parse Linux ip-neigh entry*'
+        }
+    }
+}
+
+Describe 'Invoke-PortScan loopback behavior (#13 regression)' {
+    It 'Reports an open port, omits a closed port, and captures a banner' {
+        $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $portProbe.Start()
+        $openPort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
+        $portProbe.Stop()
+
+        do {
+            $closedProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $closedProbe.Start()
+            $closedPort = ([System.Net.IPEndPoint]$closedProbe.LocalEndpoint).Port
+            $closedProbe.Stop()
+        } while ($closedPort -eq $openPort)
+
+        $serverJob = Start-ThreadJob -ArgumentList $openPort -ScriptBlock {
+            param($Port)
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+            try {
+                $listener.Start()
+                'READY'
+                $client = $listener.AcceptTcpClient()
+                try {
+                    $stream = $client.GetStream()
+                    $bytes = [System.Text.Encoding]::ASCII.GetBytes('PSNETMAP-TEST')
+                    $stream.Write($bytes, 0, $bytes.Length)
+                    $stream.Flush()
+                }
+                finally {
+                    $client.Dispose()
+                }
+            }
+            finally {
+                $listener.Stop()
+            }
+        }
+
+        try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            do {
+                $ready = @(Receive-Job -Job $serverJob -Keep) -contains 'READY'
+                if (-not $ready) { Start-Sleep -Milliseconds 25 }
+            } while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
+            $ready | Should -Be $true
+
+            $result = Invoke-PortScan -IPAddress '127.0.0.1' `
+                -Ports @($openPort, $closedPort) -TimeoutMs 1000 -GrabBanners
+
+            $result.OpenPorts.Port | Should -Contain $openPort
+            $result.OpenPorts.Port | Should -Not -Contain $closedPort
+            ($result.OpenPorts | Where-Object Port -eq $openPort).Banner |
+                Should -Be 'PSNETMAP-TEST'
+        }
+        finally {
+            Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
+            Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -432,6 +663,38 @@ Describe 'Resolve-IPHostname' {
         $result.IPAddress | Should -Be '192.0.2.1'
         $result.Success | Should -Be $false
     }
+
+    It 'Returns within the configured deadline for a stalled resolver task' {
+        InModuleScope 'NetDiagram-PS' {
+            $source = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+            $result = Wait-DnsLookupTask -LookupTask $source.Task `
+                -IPAddress '192.0.2.10' -TimeoutSeconds 1
+            $stopwatch.Stop()
+
+            $result.IPAddress | Should -Be '192.0.2.10'
+            $result.Hostname | Should -BeNullOrEmpty
+            $result.Success | Should -Be $false
+            $stopwatch.Elapsed.TotalSeconds | Should -BeLessThan 2.5
+        }
+    }
+
+    It 'Returns a failure immediately for a faulted resolver task' {
+        InModuleScope 'NetDiagram-PS' {
+            $source = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $source.SetException([InvalidOperationException]::new('fixture failure'))
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+            $result = Wait-DnsLookupTask -LookupTask $source.Task `
+                -IPAddress '192.0.2.11' -TimeoutSeconds 5
+            $stopwatch.Stop()
+
+            $result.IPAddress | Should -Be '192.0.2.11'
+            $result.Success | Should -Be $false
+            $stopwatch.Elapsed.TotalSeconds | Should -BeLessThan 1
+        }
+    }
 }
 
 Describe 'Invoke-SnmpWalk' {
@@ -458,6 +721,66 @@ Describe 'Test-IPInSubnet (private helper)' {
     It 'Should return false for a malformed CIDR' {
         InModuleScope 'NetDiagram-PS' {
             Test-IPInSubnet -IP '192.168.1.50' -CIDR 'not-a-cidr' | Should -Be $false
+        }
+    }
+}
+
+Describe 'SNMP credential-map precedence (#17 regression)' {
+    It 'Uses a matching subnet even when Default appears first' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"Default":{"communitySecret":"fallback"},"192.168.1.0/24":{"communitySecret":"office"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be '192.168.1.0/24'
+            $match.Config.communitySecret | Should -Be 'office'
+        }
+    }
+
+    It 'Uses a matching subnet when Default appears last' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"192.168.1.0/24":{"communitySecret":"office"},"Default":{"communitySecret":"fallback"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be '192.168.1.0/24'
+        }
+    }
+
+    It 'Chooses the longest matching prefix' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"10.0.0.0/16":{"communitySecret":"site"},"10.0.4.0/24":{"communitySecret":"floor"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '10.0.4.25'
+
+            $match.CIDR | Should -Be '10.0.4.0/24'
+            $match.Config.communitySecret | Should -Be 'floor'
+        }
+    }
+
+    It 'Falls back to Default when no subnet matches' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"10.0.0.0/8":{"communitySecret":"internal"},"Default":{"communitySecret":"fallback"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be 'Default'
+            $match.Config.communitySecret | Should -Be 'fallback'
+        }
+    }
+
+    It 'Rejects an invalid CIDR entry' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"192.168.999.0/24":{"communitySecret":"bad"}}' | ConvertFrom-Json
+
+            { Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40' } |
+                Should -Throw '*Invalid SNMP credential-map CIDR*'
+        }
+    }
+
+    It 'Returns the selected entry when its secret name is missing' {
+        InModuleScope 'NetDiagram-PS' {
+            $map = '{"192.168.1.0/24":{"version":"v2c"},"Default":{"communitySecret":"fallback"}}' | ConvertFrom-Json
+            $match = Resolve-SnmpCredentialConfig -SnmpMap $map -IPAddress '192.168.1.40'
+
+            $match.CIDR | Should -Be '192.168.1.0/24'
+            $match.Config.PSObject.Properties['communitySecret'] | Should -BeNullOrEmpty
         }
     }
 }
@@ -499,6 +822,81 @@ Describe 'Get-SnmpNeighbors node eligibility (#1 regression)' {
 
         # Only the single reachable/unmarked node should be queried
         Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 1 -Exactly
+    }
+}
+
+Describe 'Get-SnmpNeighbors provisional parser confidence (#20 regression)' {
+    BeforeEach {
+        $script:CredMapPath = Join-Path $script:TestDataPath 'credmap-parser.json'
+        '{}' | Out-File -FilePath $script:CredMapPath -Force
+        $script:ParserTopology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP = '192.168.1.1'; Reachable = $true }
+                [pscustomobject]@{ IP = '192.168.1.2'; Reachable = $true }
+            )
+            Edges = @()
+            Subnets = @()
+        }
+    }
+
+    It 'Accepts typed management addresses and rejects unrelated or unsafe values' {
+        Mock Invoke-SnmpWalk {
+            if ($TargetIP -eq '192.168.1.1') {
+                @(
+                    'oid.1 = STRING: "peer text mentions 192.168.1.2"'
+                    'oid.2 = IpAddress: 192.168.1.1'
+                    'oid.3 = IpAddress: 192.168.1.999'
+                    'oid.4 = IpAddress: 203.0.113.9'
+                    'oid.5 = IpAddress: 192.168.1.2'
+                )
+            }
+            else { @() }
+        } -ModuleName 'NetDiagram-PS'
+
+        $result = $script:ParserTopology | Get-SnmpNeighbors `
+            -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+
+        $result.Edges | Should -HaveCount 1
+        $result.Edges[0].TargetIP | Should -Be '192.168.1.2'
+        $result.Edges[0].Confidence | Should -Be 'L2-SNMP-Heuristic'
+    }
+
+    It 'Accepts a typed four-octet Hex-STRING as a provisional hint' {
+        Mock Invoke-SnmpWalk {
+            if ($TargetIP -eq '192.168.1.1') { @('oid.1 = Hex-STRING: C0 A8 01 02') }
+            else { @() }
+        } -ModuleName 'NetDiagram-PS'
+
+        $result = $script:ParserTopology | Get-SnmpNeighbors `
+            -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+
+        $result.Edges | Should -HaveCount 1
+        $result.Edges[0].TargetIP | Should -Be '192.168.1.2'
+        $result.Edges[0].Confidence | Should -Be 'L2-SNMP-Heuristic'
+    }
+
+    It 'Exports provisional hints with a distinct amber dashed style' {
+        $script:ParserTopology.Edges = @(
+            [pscustomobject]@{
+                SourceIP = '192.168.1.1'; TargetIP = '192.168.1.2'; Label = 'LLDP hint'
+                Source = 'SNMP'; Confidence = 'L2-SNMP-Heuristic'
+            }
+        )
+        foreach ($node in $script:ParserTopology.Nodes) {
+            $node | Add-Member -NotePropertyName Hostname -NotePropertyValue $node.IP
+            $node | Add-Member -NotePropertyName Role -NotePropertyValue 'switch'
+            $node | Add-Member -NotePropertyName Vendor -NotePropertyValue 'Test'
+            $node | Add-Member -NotePropertyName OS -NotePropertyValue 'Test'
+            $node | Add-Member -NotePropertyName Layer -NotePropertyValue 'Access'
+        }
+        $drawioPath = Join-Path $script:TestDataPath 'provisional-snmp.drawio'
+
+        $script:ParserTopology | Export-DrawIO -OutFile $drawioPath
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $edge = $xml.SelectSingleNode('//mxCell[@edge="1"]')
+
+        $edge.style | Should -Match 'strokeColor=#B26A00'
+        $edge.style | Should -Match 'dashed=1'
     }
 }
 
@@ -554,13 +952,53 @@ Describe 'Export-DrawIO duplicate-IP handling (#8 regression)' {
         $topology | Export-DrawIO -OutFile $drawioPath -WarningAction SilentlyContinue
 
         $xml = [xml](Get-Content -Path $drawioPath -Raw)
-        $ids = @($xml.SelectNodes('//mxCell') | ForEach-Object { $_.id })
+        $ids = @($xml.SelectNodes('//*[@id]') | ForEach-Object { $_.id })
 
         # All mxCell ids must be unique
         ($ids | Sort-Object -Unique).Count | Should -Be $ids.Count
 
         # Duplicate IP collapsed to a single node vertex (2 unique IPs)
         @($xml.SelectNodes("//mxCell[@vertex='1']")).Count | Should -Be 2
+    }
+}
+
+Describe 'Export-DrawIO tooltip and reachability metadata (#10 regression)' {
+    It 'Emits draw.io UserObjects with consistent metadata for all three states' {
+        $topology = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP = '192.168.1.1'; Hostname = 'router'; Role = 'router'; Vendor = 'Cisco'; OS = 'IOS'; Layer = 'Core'; Reachable = $true }
+                [pscustomobject]@{ IP = '192.168.1.2'; Hostname = 'switch'; Role = 'switch'; Vendor = 'Cisco'; OS = 'NX-OS'; Layer = 'Access'; Reachable = $false }
+                [pscustomobject]@{ IP = '192.168.1.3'; Hostname = 'untested-router'; Role = 'router'; Vendor = 'Unknown'; OS = 'Unknown'; Layer = 'Core'; Reachable = $null }
+                [pscustomobject]@{ IP = '192.168.1.4'; Hostname = 'untested-switch'; Role = 'switch'; Vendor = 'Unknown'; OS = 'Unknown'; Layer = 'Access'; Reachable = $null }
+            )
+            Edges = @(
+                [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.3'; Label = 'Test'; Confidence = 'L3-Inferred' }
+            )
+            Subnets = @()
+        }
+        $drawioPath = Join-Path $script:TestDataPath 'status-tooltips.drawio'
+
+        $topology | Export-DrawIO -OutFile $drawioPath
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $objects = @($xml.SelectNodes('//UserObject'))
+
+        $objects | Should -HaveCount 4
+        @($objects.status) | Should -Contain 'Reachable'
+        @($objects.status) | Should -Contain 'Unreachable'
+        @($objects.status) | Should -Contain 'Unknown'
+
+        $unknown = @($objects | Where-Object { $_.status -eq 'Unknown' })
+        $unknown | Should -HaveCount 2
+        @($unknown.role) | Should -Contain 'router'
+        @($unknown.role) | Should -Contain 'switch'
+        foreach ($node in $unknown) {
+            $node.tooltip | Should -Match 'Status: Unknown'
+            $node.mxCell.style | Should -Match 'fillColor=#f5f5f5'
+        }
+
+        $edge = $xml.SelectSingleNode('//mxCell[@edge="1"]')
+        @($objects.id) | Should -Contain $edge.source
+        @($objects.id) | Should -Contain $edge.target
     }
 }
 
@@ -580,6 +1018,90 @@ Describe 'Export-DrawIO subnet container parenting (#9 regression)' {
         foreach ($n in $nodeCells) {
             $n.parent | Should -Be $container.id
         }
+    }
+}
+
+Describe 'Export-DrawIO dynamic container layout (#19 regression)' {
+    It 'Contains every node for a <Count>-node subnet' -TestCases @(
+        @{ Count = 0 }
+        @{ Count = 1 }
+        @{ Count = 16 }
+        @{ Count = 17 }
+        @{ Count = 50 }
+    ) {
+        param($Count)
+
+        $nodes = @(
+            for ($index = 1; $index -le $Count; $index++) {
+                [pscustomobject]@{
+                    IP = "10.0.0.$index"; Hostname = "node-$index"; Role = 'switch'
+                    Vendor = 'Test'; OS = 'Test'; Layer = 'Access'; Reachable = $null
+                }
+            }
+        )
+        $topology = [pscustomobject]@{
+            Nodes = $nodes
+            Edges = @()
+            Subnets = @([pscustomobject]@{ CIDR = '10.0.0.0/24'; Label = 'Test'; VLAN = 1 })
+        }
+        $drawioPath = Join-Path $script:TestDataPath "layout-$Count.drawio"
+
+        $topology | Export-DrawIO -OutFile $drawioPath
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $container = $xml.SelectSingleNode("//mxCell[contains(@style,'swimlane')]")
+        $containerHeight = [double]$container.mxGeometry.height
+        $nodeCells = @($xml.SelectNodes("//mxCell[@vertex='1' and not(contains(@style,'swimlane'))]"))
+
+        $nodeCells | Should -HaveCount $Count
+        foreach ($node in $nodeCells) {
+            $node.parent | Should -Be $container.id
+            ([double]$node.mxGeometry.y + [double]$node.mxGeometry.height) |
+                Should -BeLessOrEqual $containerHeight
+        }
+    }
+
+    It 'Keeps multiple variable-height containers and unmatched nodes separated' {
+        $nodes = @()
+        $subnets = @()
+        $counts = @(50, 1, 17, 16)
+        for ($subnetIndex = 0; $subnetIndex -lt $counts.Count; $subnetIndex++) {
+            $octet = $subnetIndex + 1
+            $subnets += [pscustomobject]@{ CIDR = "10.0.$octet.0/24"; Label = "Subnet $octet"; VLAN = $octet }
+            for ($hostIndex = 1; $hostIndex -le $counts[$subnetIndex]; $hostIndex++) {
+                $nodes += [pscustomobject]@{
+                    IP = "10.0.$octet.$hostIndex"; Hostname = "node-$octet-$hostIndex"; Role = 'switch'
+                    Vendor = 'Test'; OS = 'Test'; Layer = 'Access'; Reachable = $null
+                }
+            }
+        }
+        $nodes += [pscustomobject]@{
+            IP = '203.0.113.10'; Hostname = 'unmatched'; Role = 'server'
+            Vendor = 'Test'; OS = 'Test'; Layer = 'Servers'; Reachable = $null
+        }
+        $topology = [pscustomobject]@{ Nodes = $nodes; Edges = @(); Subnets = $subnets }
+        $drawioPath = Join-Path $script:TestDataPath 'layout-multiple.drawio'
+
+        $topology | Export-DrawIO -OutFile $drawioPath
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $containers = @($xml.SelectNodes("//mxCell[contains(@style,'swimlane')]"))
+
+        for ($left = 0; $left -lt $containers.Count; $left++) {
+            for ($right = $left + 1; $right -lt $containers.Count; $right++) {
+                $a = $containers[$left].mxGeometry
+                $b = $containers[$right].mxGeometry
+                $overlaps = ([double]$a.x -lt ([double]$b.x + [double]$b.width)) -and
+                    (([double]$a.x + [double]$a.width) -gt [double]$b.x) -and
+                    ([double]$a.y -lt ([double]$b.y + [double]$b.height)) -and
+                    (([double]$a.y + [double]$a.height) -gt [double]$b.y)
+                $overlaps | Should -Be $false
+            }
+        }
+
+        $containerBottom = ($containers | ForEach-Object {
+            [double]$_.mxGeometry.y + [double]$_.mxGeometry.height
+        } | Measure-Object -Maximum).Maximum
+        $unmatched = $xml.SelectSingleNode("//UserObject[contains(@label,'unmatched')]/mxCell")
+        [double]$unmatched.mxGeometry.y | Should -BeGreaterThan $containerBottom
     }
 }
 
@@ -681,5 +1203,103 @@ Describe 'Quick-start wizard output paths (#9 regression)' {
         $inventoryPath | Should -Be (Join-Path $TestDrive 'office-inventory.json')
         [System.IO.Path]::GetFullPath($inventoryPath) |
             Should -Not -Be ([System.IO.Path]::GetFullPath($diagramPath))
+    }
+}
+
+Describe 'Quick-start wizard interface selection (#15 regression)' {
+    BeforeAll {
+        $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
+        . $exampleScript
+    }
+
+    It 'Selects the Windows address attached to the default route index' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'VPN'; Index = 7; IPAddress = '10.8.0.2'; PrefixLength = 24 }
+            [pscustomobject]@{ Name = 'Ethernet'; Index = 12; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+        )
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -DefaultInterfaceIndex 12
+        $selected.Name | Should -Be 'Ethernet'
+        $selected.IPAddress | Should -Be '192.168.1.20'
+    }
+
+    It 'Retains macOS interface names and selects the default-route interface' {
+        $interfaces = @(ConvertFrom-MacOSInterfaceText -Lines @(
+            'utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380'
+            '    inet 10.8.0.2 --> 10.8.0.2 netmask 0xffffffff'
+            'en0: flags=8863<UP,BROADCAST,SMART,RUNNING> mtu 1500'
+            '    inet 192.168.50.12 netmask 0xffffff00 broadcast 192.168.50.255'
+        ))
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -DefaultInterfaceName 'en0'
+        $selected.Name | Should -Be 'en0'
+        $selected.PrefixLength | Should -Be 24
+    }
+
+    It 'Retains Linux interface names and honors an explicit selector' {
+        $interfaces = @(ConvertFrom-LinuxInterfaceText -Lines @(
+            '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500'
+            '    inet 192.168.1.20/24 brd 192.168.1.255 scope global eth0'
+            '5: wg0: <POINTOPOINT,UP,LOWER_UP> mtu 1420'
+            '    inet 10.8.0.2/24 scope global wg0'
+        ))
+
+        $selected = Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'wg0' `
+            -DefaultInterfaceName 'eth0'
+        $selected.Name | Should -Be 'wg0'
+        $selected.IPAddress | Should -Be '10.8.0.2'
+    }
+
+    It 'Fails clearly when multiple interfaces exist without a default route' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'eth0'; Index = 2; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+            [pscustomobject]@{ Name = 'wg0'; Index = 5; IPAddress = '10.8.0.2'; PrefixLength = 24 }
+        )
+
+        { Select-ScanInterface -Interfaces $interfaces } |
+            Should -Throw '*Use -InterfaceName*'
+    }
+
+    It 'Fails clearly for an unavailable explicit selector' {
+        $interfaces = @(
+            [pscustomobject]@{ Name = 'eth0'; Index = 2; IPAddress = '192.168.1.20'; PrefixLength = 24 }
+        )
+
+        { Select-ScanInterface -Interfaces $interfaces -RequestedInterface 'missing0' } |
+            Should -Throw '*was not found*'
+    }
+}
+
+Describe 'Export overwrite protection (#27 regression)' {
+    It 'Refuses to overwrite an existing file without -Force' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $drawioPath = Join-Path $script:TestDataPath 'overwrite-test.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath -Force
+        { $topology | Export-DrawIO -OutFile $drawioPath } | Should -Throw "*already exists*Use -Force*"
+        $metaPath = Join-Path $script:TestDataPath 'overwrite-test.json'
+        $topology | Export-Metadata -OutFile $metaPath -Force
+        { $topology | Export-Metadata -OutFile $metaPath } | Should -Throw "*already exists*Use -Force*"
+    }
+
+    It 'Overwrites an existing file when -Force is specified' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $drawioPath = Join-Path $script:TestDataPath 'overwrite-force.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath -Force
+        $firstHash = (Get-FileHash $drawioPath -Algorithm SHA256).Hash
+        $topology | Export-DrawIO -OutFile $drawioPath -Force
+        (Get-FileHash $drawioPath -Algorithm SHA256).Hash | Should -Be $firstHash
+        $metaPath = Join-Path $script:TestDataPath 'overwrite-force-meta.json'
+        $topology | Export-Metadata -OutFile $metaPath -Force
+        { $topology | Export-Metadata -OutFile $metaPath -Force } | Should -Not -Throw
+    }
+
+    It 'Does not write a file when -WhatIf is specified' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $drawioPath = Join-Path $script:TestDataPath 'whatif-test.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath -WhatIf
+        Test-Path $drawioPath | Should -Be $false
+        $metaPath = Join-Path $script:TestDataPath 'whatif-test.json'
+        $topology | Export-Metadata -OutFile $metaPath -WhatIf
+        Test-Path $metaPath | Should -Be $false
     }
 }

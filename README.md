@@ -49,12 +49,14 @@ The wizard performs the following actions:
 
 ## Installation
 
-### From PowerShell Gallery (once published)
+### From PowerShell Gallery
 
 ```powershell
 Install-Module -Name NetDiagram-PS -Scope CurrentUser
 Import-Module NetDiagram-PS
 ```
+
+Available at [powershellgallery.com/packages/NetDiagram-PS](https://www.powershellgallery.com/packages/NetDiagram-PS).
 
 ### From source (clone)
 
@@ -80,6 +82,12 @@ pwsh .\examples\New-NetworkDiagram.ps1 -ScanDepth Medium
 
 # Full scan (all 254 IPs, ~2 minutes)
 pwsh .\examples\New-NetworkDiagram.ps1 -ScanDepth Full -OutputPath .\office-network.drawio
+
+# Choose an interface explicitly (useful with VPNs or multiple adapters)
+pwsh .\examples\New-NetworkDiagram.ps1 -InterfaceName en0
+
+# Limit each reverse DNS lookup to one second
+pwsh .\examples\New-NetworkDiagram.ps1 -DnsTimeoutSeconds 1
 ```
 
 ### Method 2: Manual Workflow (manual inventory)
@@ -119,9 +127,10 @@ $topo | Export-DrawIO -OutFile '.\network.drawio'
 > end without a separate reachability pass. Add `-OnlyReachable` (after piping through
 > `Test-DeviceReachability`) to query only nodes that answered a ping.
 >
-> **LLDP/CDP parsing is best-effort (MVP):** it extracts management IPs from `snmpwalk`
-> output and links them to known nodes, but does not fully decode the LLDP MIB. Treat the
-> resulting SNMP edges as hints to verify, not authoritative topology. The community
+> **LLDP/CDP parsing is best-effort (MVP):** it extracts typed management-address values
+> from `snmpwalk` output and links them to known nodes, but does not fully decode the
+> LLDP/CDP tables. These links are labeled `L2-SNMP-Heuristic` and drawn as amber dashed
+> hints. Only structured, correlated neighbor data may use verified `L2-SNMP`. The community
 > string is redacted from verbose logging, but is briefly visible in the local process
 > list while `snmpwalk` runs — prefer SNMPv3 for anything sensitive.
 
@@ -161,6 +170,13 @@ Create a JSON file with your network devices:
 
 Supported roles: `router`, `core-router`, `distribution`, `switch`, `server`, `workstation`
 
+The stable inventory contract is IPv4-only. `knownDevices` is required and must be a
+JSON array; `subnets`, when present, must also be an array. Each device requires a unique
+IPv4 `ip`, and each subnet requires an IPv4 `cidr` with a prefix from 0 through 32.
+Addresses are normalized, and host bits in CIDRs are cleared (for example,
+`192.168.1.42/24` becomes `192.168.1.0/24`). IPv6 is rejected explicitly. Unknown or
+omitted roles remain valid and are placed in the Access layer.
+
 See `examples/inventory-template.json` for a complete template.
 
 ---
@@ -173,7 +189,7 @@ Generated diagrams include:
 - Subnet containers for visual grouping by network segment
 - Color-coded status indicators: green (reachable), red (unreachable), and gray (unknown)
 - Orthogonal connectors with rounded corners
-- Confidence levels: solid lines (layer 2 SNMP verified) and dashed lines (layer 3 inferred)
+- Confidence levels: solid green (verified layer 2 SNMP), dashed amber (provisional SNMP hint), and dashed gray (layer 3 inferred)
 - Labels that include device names, IP addresses, and connection details
 - Hierarchical layouts that align devices by network layer
 
@@ -201,17 +217,51 @@ Generated diagrams include:
 
 ```text
 PSNetMap/
-├── CHANGELOG.md            # Release history
-├── LICENSE                 # MIT license
-├── README.md               # Main documentation (this file)
-├── STRUCTURE.md            # Additional notes on the folder layout
-├── WHERE-TO-SAVE-FILES.txt # Tips for keeping inventories outside the repo
-├── NetDiagram-PS/          # PowerShell module manifest & implementation
-├── examples/               # Wizard script plus sample JSON templates
-└── tests/                  # Pester test suite
+├── .github/workflows/ci.yml        # Three-OS Pester and analyzer checks
+├── .gitignore                      # Generated files, packages, and editor state
+├── AGENTS.md                       # Local contributor instructions
+├── CHANGELOG.md                    # Release history
+├── LICENSE                         # MIT license
+├── PUBLISHING.md                   # Gallery packaging and release procedure
+├── README.md                       # Main documentation and conventions
+├── NetDiagram-PS/
+│   ├── NetDiagram-PS.psd1          # Module manifest
+│   └── NetDiagram-PS.psm1          # Module implementation
+├── examples/
+│   ├── New-NetworkDiagram.ps1      # Guided discovery wizard
+│   ├── credmap.json                # SNMP credential-map template
+│   └── inventory-template.json     # Inventory template
+└── tests/
+    └── NetDiagram.Tests.ps1        # Pester test suite
 ```
 
-The module ships without a separate `docs/` directory. All user-facing documentation currently lives in the files listed above.
+This is the single maintained repository-layout reference. Update it when tracked
+top-level files or test entry points change.
+
+### Keep generated network data outside the clone
+
+Diagrams, inventories, and credential maps can describe private infrastructure. Use a
+separate working directory so generated data is not accidentally committed.
+
+Windows PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Path C:\MyNetworkDocs -Force
+Set-Location C:\MyNetworkDocs
+Import-Module C:\Path\To\PSNetMap\NetDiagram-PS\NetDiagram-PS.psd1
+```
+
+macOS or Linux:
+
+```powershell
+New-Item -ItemType Directory -Path "$HOME/network-docs" -Force
+Set-Location "$HOME/network-docs"
+Import-Module /path/to/PSNetMap/NetDiagram-PS/NetDiagram-PS.psd1
+```
+
+Save files such as `my-inventory.json`, `my-network.drawio`, and local credential maps
+in that working directory. Do not put secret values in a credential map; store them with
+PowerShell SecretManagement as shown in the SNMP example above.
 
 ---
 
@@ -276,12 +326,12 @@ Import-Inventory my-servers.json | Export-DrawIO -OutFile servers.drawio
 ```powershell
 # Save baseline
 $baseline = Import-Inventory old-network.json
-$baseline | ConvertTo-Json | Out-File baseline-topo.json
+$baseline | Export-Topology -OutFile baseline-topo.json
 $baseline | Export-Metadata -OutFile baseline-meta.json
 
 # Save current state
 $current = Import-Inventory current-network.json
-$current | ConvertTo-Json | Out-File current-topo.json
+$current | Export-Topology -OutFile current-topo.json
 $current | Export-Metadata -OutFile current-meta.json
 
 # Compare
@@ -347,6 +397,15 @@ Check the `examples/` directory:
 ---
 
 ## Running Tests
+
+On macOS or Linux, use the local runner so missing prerequisites are explicit:
+
+```bash
+./tests/run-tests.sh
+```
+
+Exit `0` means pass, `1` means tests failed, and `2` means `pwsh` or Pester is
+unavailable and the suite did not run.
 
 ```powershell
 # Install Pester if needed

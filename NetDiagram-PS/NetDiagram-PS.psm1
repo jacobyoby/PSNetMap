@@ -44,6 +44,55 @@ function New-EmptyTopology {
     }
 }
 
+function ConvertTo-NormalizedIPv4Address {
+    param(
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][string]$Context
+    )
+
+    $address = $null
+    if (-not [System.Net.IPAddress]::TryParse($Value, [ref]$address) -or
+        $address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+        throw "Invalid inventory $Context '$Value': expected an IPv4 address. IPv6 is not supported."
+    }
+    return $address.ToString()
+}
+
+function ConvertTo-NormalizedIPv4Cidr {
+    param(
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][string]$Context
+    )
+
+    if ($Value -notmatch '^(.+)\/(\d{1,2})$') {
+        throw "Invalid inventory $Context '$Value': expected IPv4 CIDR notation."
+    }
+
+    $address = ConvertTo-NormalizedIPv4Address -Value $matches[1] -Context $Context
+    $prefixLength = [int]$matches[2]
+    if ($prefixLength -gt 32) {
+        throw "Invalid inventory $Context '$Value': IPv4 prefix must be between 0 and 32."
+    }
+
+    $bytes = ([System.Net.IPAddress]::Parse($address)).GetAddressBytes()
+    $bitsRemaining = $prefixLength
+    for ($index = 0; $index -lt $bytes.Count; $index++) {
+        $mask = if ($bitsRemaining -ge 8) {
+            255
+        }
+        elseif ($bitsRemaining -le 0) {
+            0
+        }
+        else {
+            256 - [Math]::Pow(2, 8 - $bitsRemaining)
+        }
+        $bytes[$index] = [byte]($bytes[$index] -band [int]$mask)
+        $bitsRemaining -= 8
+    }
+
+    return "$([System.Net.IPAddress]::new($bytes))/$prefixLength"
+}
+
 #endregion
 
 #region Import-Inventory
@@ -54,7 +103,10 @@ function Import-Inventory {
         Imports network inventory from JSON file
     .DESCRIPTION
         Reads a JSON inventory file and creates a Topology object with Nodes and Subnets.
-        Nodes are enriched with Layer information based on their role.
+        The stable inventory contract is IPv4-only. Device addresses and subnet CIDRs
+        are validated and normalized; subnet host bits are cleared. Duplicate device
+        addresses are rejected. Unknown or omitted roles are retained and placed in the
+        Access layer.
     .PARAMETER Path
         Path to the inventory JSON file
     .EXAMPLE
@@ -81,45 +133,71 @@ function Import-Inventory {
         if (-not $inventory.PSObject.Properties['knownDevices']) {
             throw "Invalid inventory: missing 'knownDevices' property"
         }
+        if ($null -eq $inventory.knownDevices -or
+            $inventory.knownDevices -is [string] -or
+            $inventory.knownDevices -isnot [System.Collections.IEnumerable]) {
+            throw "Invalid inventory: 'knownDevices' must be an array"
+        }
+        if ($inventory.PSObject.Properties['subnets'] -and
+            ($null -eq $inventory.subnets -or $inventory.subnets -is [string] -or
+             $inventory.subnets -isnot [System.Collections.IEnumerable])) {
+            throw "Invalid inventory: 'subnets' must be an array when present"
+        }
 
         $topology = New-EmptyTopology
+        $deviceAddresses = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 
         # Process known devices
-        $nodes = foreach ($device in $inventory.knownDevices) {
-            if ([string]::IsNullOrWhiteSpace($device.ip)) {
-                Write-Warning "Skipping device without IP address"
-                continue
+        $deviceIndex = 0
+        $nodes = foreach ($device in @($inventory.knownDevices)) {
+            if ($null -eq $device -or -not $device.PSObject.Properties['ip'] -or
+                $device.ip -isnot [string] -or [string]::IsNullOrWhiteSpace($device.ip)) {
+                throw "Invalid inventory knownDevices[$deviceIndex]: missing string 'ip'"
+            }
+
+            $normalizedIP = ConvertTo-NormalizedIPv4Address -Value $device.ip -Context "knownDevices[$deviceIndex].ip"
+            if (-not $deviceAddresses.Add($normalizedIP)) {
+                throw "Invalid inventory knownDevices[$deviceIndex].ip '$normalizedIP': duplicate device address"
             }
 
             $role = if ($device.PSObject.Properties['role']) { $device.role } else { 'unknown' }
             $layer = Get-LayerFromRole -Role $role
 
             [pscustomobject]@{
-                IP        = $device.ip
-                Hostname  = if ($device.PSObject.Properties['hostname']) { $device.hostname } else { $device.ip }
+                IP        = $normalizedIP
+                Hostname  = if ($device.PSObject.Properties['hostname'] -and -not [string]::IsNullOrWhiteSpace($device.hostname)) { $device.hostname } else { $normalizedIP }
                 Role      = $role
                 Vendor    = if ($device.PSObject.Properties['vendor']) { $device.vendor } else { 'Unknown' }
                 OS        = if ($device.PSObject.Properties['os']) { $device.os } else { 'Unknown' }
                 Layer     = $layer
                 Reachable = $null
             }
+            $deviceIndex++
         }
 
         $topology.Nodes = @($nodes)
 
         # Process subnets if present
         if ($inventory.PSObject.Properties['subnets'] -and $inventory.subnets) {
-            $subnets = foreach ($subnet in $inventory.subnets) {
-                if ([string]::IsNullOrWhiteSpace($subnet.cidr)) {
-                    Write-Warning "Skipping subnet without CIDR"
-                    continue
+            $subnetIndex = 0
+            $subnetCidrs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            $subnets = foreach ($subnet in @($inventory.subnets)) {
+                if ($null -eq $subnet -or -not $subnet.PSObject.Properties['cidr'] -or
+                    $subnet.cidr -isnot [string] -or [string]::IsNullOrWhiteSpace($subnet.cidr)) {
+                    throw "Invalid inventory subnets[$subnetIndex]: missing string 'cidr'"
+                }
+
+                $normalizedCidr = ConvertTo-NormalizedIPv4Cidr -Value $subnet.cidr -Context "subnets[$subnetIndex].cidr"
+                if (-not $subnetCidrs.Add($normalizedCidr)) {
+                    throw "Invalid inventory subnets[$subnetIndex].cidr '$normalizedCidr': duplicate subnet"
                 }
 
                 [pscustomobject]@{
-                    CIDR  = $subnet.cidr
-                    Label = if ($subnet.PSObject.Properties['label']) { $subnet.label } else { $subnet.cidr }
+                    CIDR  = $normalizedCidr
+                    Label = if ($subnet.PSObject.Properties['label'] -and -not [string]::IsNullOrWhiteSpace($subnet.label)) { $subnet.label } else { $normalizedCidr }
                     VLAN  = if ($subnet.PSObject.Properties['vlan']) { $subnet.vlan } else { $null }
                 }
+                $subnetIndex++
             }
             $topology.Subnets = @($subnets)
         }
@@ -335,7 +413,14 @@ function Get-SnmpNeighbors {
     .DESCRIPTION
         Queries nodes for LLDP neighbor information via SNMP.
         Uses credential map to resolve community strings from SecretManagement.
-        Adds discovered edges to the topology with L2-SNMP confidence.
+        Adds discovered edges with provisional L2-SNMP-Heuristic confidence. The parser
+        does not assign verified L2-SNMP confidence because it does not fully correlate
+        structured LLDP/CDP table rows.
+
+        CREDENTIAL MATCHING: The most specific matching IPv4 CIDR wins regardless of
+        JSON property order. Default is used only when no CIDR matches. If the selected
+        entry has no available community secret, the node is skipped unless -TryPublic
+        was explicitly supplied.
 
         NODE ELIGIBILITY: By default every node is queried EXCEPT nodes that have been
         explicitly marked unreachable (Reachable -eq $false). Nodes with unknown
@@ -453,16 +538,14 @@ All SNMP attempts will be logged to verbose output.
             $source = 'CredentialMap'
 
             if ($credMap.PSObject.Properties['snmp'] -and $credMap.snmp) {
-                foreach ($cidrEntry in $credMap.snmp.PSObject.Properties) {
-                    $cidr = $cidrEntry.Name
-                    $config = $cidrEntry.Value
-
-                    # Simple CIDR matching (for MVP, just match Default or exact match)
-                    if ($cidr -eq 'Default' -or (Test-IPInSubnet -IP $node.IP -CIDR $cidr)) {
-                        if ($config.PSObject.Properties['communitySecret']) {
-                            $communitySecret = $config.communitySecret
-                            break
-                        }
+                $credentialMatch = Resolve-SnmpCredentialConfig -SnmpMap $credMap.snmp -IPAddress $node.IP
+                if ($credentialMatch) {
+                    $source = "CredentialMap:$($credentialMatch.CIDR)"
+                    if ($credentialMatch.Config.PSObject.Properties['communitySecret']) {
+                        $communitySecret = $credentialMatch.Config.communitySecret
+                    }
+                    else {
+                        Write-Warning "SNMP credential entry '$($credentialMatch.CIDR)' has no communitySecret; skipping configured credential for $($node.IP)"
                     }
                 }
             }
@@ -518,12 +601,12 @@ All SNMP attempts will be logged to verbose output.
 
                 $targetIP = $null
 
-                # net-snmp renders an LLDP management address either as a dotted quad
-                # (sometimes prefixed 'IpAddress:') or as a 4-octet Hex-STRING.
-                if ($value -match '(?:IpAddress:\s*)?\b((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\b') {
+                # Only typed address values are eligible. Arbitrary STRING values can
+                # contain known IPs but are not evidence of a neighbor relationship.
+                if ($value -match '^IpAddress:\s*((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\s*$') {
                     $targetIP = $matches[1]
                 }
-                elseif ($value -match 'Hex-STRING:\s*([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})') {
+                elseif ($value -match '^Hex-STRING:\s*([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})[ :]+([0-9A-Fa-f]{2})\s*$') {
                     $targetIP = @(
                         [Convert]::ToInt32($matches[1], 16)
                         [Convert]::ToInt32($matches[2], 16)
@@ -552,7 +635,7 @@ All SNMP attempts will be logged to verbose output.
                     TargetIP   = $targetIP
                     Label      = $label
                     Source     = 'SNMP'
-                    Confidence = 'L2-SNMP'
+                    Confidence = 'L2-SNMP-Heuristic'
                 }
 
                 $null = $discoveredEdges.Add($edge)
@@ -571,6 +654,57 @@ All SNMP attempts will be logged to verbose output.
 
         return $Topology
     }
+}
+
+function Resolve-SnmpCredentialConfig {
+    param(
+        [Parameter(Mandatory)][psobject]$SnmpMap,
+        [Parameter(Mandatory)][string]$IPAddress
+    )
+
+    $defaultConfig = $null
+    $cidrMatches = @()
+
+    foreach ($entry in $SnmpMap.PSObject.Properties) {
+        if ($entry.Name -eq 'Default') {
+            $defaultConfig = $entry.Value
+            continue
+        }
+
+        if ($entry.Name -notmatch '^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$') {
+            throw "Invalid SNMP credential-map CIDR '$($entry.Name)'. Expected an IPv4 CIDR or Default."
+        }
+
+        $prefixLength = [int]$matches[2]
+        $networkAddress = $null
+        if ($prefixLength -gt 32 -or
+            -not [System.Net.IPAddress]::TryParse($matches[1], [ref]$networkAddress) -or
+            $networkAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+            throw "Invalid SNMP credential-map CIDR '$($entry.Name)'. Expected an IPv4 CIDR or Default."
+        }
+
+        if (Test-IPInSubnet -IP $IPAddress -CIDR $entry.Name) {
+            $cidrMatches += [pscustomobject]@{
+                CIDR = $entry.Name
+                PrefixLength = $prefixLength
+                Config = $entry.Value
+            }
+        }
+    }
+
+    $bestMatch = $cidrMatches | Sort-Object PrefixLength -Descending | Select-Object -First 1
+    if ($bestMatch) {
+        return $bestMatch
+    }
+    if ($null -ne $defaultConfig) {
+        return [pscustomobject]@{
+            CIDR = 'Default'
+            PrefixLength = -1
+            Config = $defaultConfig
+        }
+    }
+
+    return $null
 }
 
 function Test-IPInSubnet {
@@ -642,7 +776,8 @@ function Merge-Edges {
         Merges and deduplicates edge candidates
     .DESCRIPTION
         Deduplicates edges using sorted endpoints as key.
-        Prioritizes L2-SNMP confidence over L3-Inferred.
+        Prioritizes verified L2-SNMP, then provisional L2-SNMP-Heuristic, then
+        L3-Inferred. An SNMP source alone never promotes an edge to verified.
         Keeps first non-empty label.
     .PARAMETER Edges
         Array of edge objects to merge
@@ -677,13 +812,30 @@ function Merge-Edges {
         $endpoints = @($edge.SourceIP, $edge.TargetIP) | Sort-Object
         $key = "$($endpoints[0])|$($endpoints[1])"
 
+        $incomingConfidence = if ($edge.PSObject.Properties['Confidence']) {
+            $edge.Confidence
+        }
+        elseif ($edge.PSObject.Properties['Source'] -and $edge.Source -eq 'SNMP') {
+            'L2-SNMP-Heuristic'
+        }
+        else {
+            'L3-Inferred'
+        }
+
+        $confidenceRank = @{
+            'L3-Inferred' = 1
+            'L2-SNMP-Heuristic' = 2
+            'L2-SNMP' = 3
+        }
+
         if ($edgeMap.Contains($key)) {
             $existing = $edgeMap[$key]
 
-            # Prioritize L2-SNMP confidence
-            if ($edge.Source -eq 'SNMP' -and $existing.Source -ne 'SNMP') {
-                $existing.Source = 'SNMP'
-                $existing.Confidence = 'L2-SNMP'
+            $existingRank = if ($confidenceRank.ContainsKey($existing.Confidence)) { $confidenceRank[$existing.Confidence] } else { 0 }
+            $incomingRank = if ($confidenceRank.ContainsKey($incomingConfidence)) { $confidenceRank[$incomingConfidence] } else { 0 }
+            if ($incomingRank -gt $existingRank) {
+                $existing.Source = if ($edge.PSObject.Properties['Source']) { $edge.Source } else { 'Unknown' }
+                $existing.Confidence = $incomingConfidence
             }
 
             # Keep first non-empty label
@@ -693,22 +845,12 @@ function Merge-Edges {
         }
         else {
             # Add new edge with confidence
-            $confidence = if ($edge.PSObject.Properties['Confidence']) {
-                $edge.Confidence
-            }
-            elseif ($edge.Source -eq 'SNMP') {
-                'L2-SNMP'
-            }
-            else {
-                'L3-Inferred'
-            }
-
             $edgeMap[$key] = [pscustomobject]@{
                 SourceIP   = $edge.SourceIP
                 TargetIP   = $edge.TargetIP
                 Label      = if ($edge.PSObject.Properties['Label']) { $edge.Label } else { '' }
                 Source     = if ($edge.PSObject.Properties['Source']) { $edge.Source } else { 'Unknown' }
-                Confidence = $confidence
+                Confidence = $incomingConfidence
             }
         }
     }
@@ -734,18 +876,28 @@ function Export-DrawIO {
     .EXAMPLE
         $topo | Export-DrawIO -OutFile '.\network.drawio'
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
         [Parameter(Mandatory, ValueFromPipeline)]
         [pscustomobject]$Topology,
 
         [Parameter(Mandatory)]
-        [string]$OutFile
+        [string]$OutFile,
+
+        [Parameter()]
+        [switch]$Force
     )
 
     process {
         if ($null -eq $Topology -or $null -eq $Topology.Nodes) {
             throw "Invalid topology object"
+        }
+
+        if ((Test-Path -LiteralPath $OutFile) -and -not $Force) {
+            throw "File '$OutFile' already exists. Use -Force to overwrite."
+        }
+        if (-not $PSCmdlet.ShouldProcess($OutFile, 'Export-DrawIO')) {
+            return
         }
 
         # De-duplicate nodes by IP first. Duplicate IPs would otherwise share a single
@@ -792,19 +944,46 @@ function Export-DrawIO {
         $null = $xml.AppendLine('        <mxCell id="0"/>')
         $null = $xml.AppendLine('        <mxCell id="1" parent="0"/>')
 
-        # Add subnet containers (best practice: group by network segment)
+        # Assign each node to its first matching subnet before sizing containers.
+        $nodeSubnet = @{}
+        $subnetNodeCount = @{}
+        foreach ($subnet in $Topology.Subnets) {
+            $subnetNodeCount[$subnet.CIDR] = 0
+        }
+        foreach ($node in $uniqueNodes) {
+            foreach ($subnet in $Topology.Subnets) {
+                if (Test-IPInSubnet -IP $node.IP -CIDR $subnet.CIDR) {
+                    $nodeSubnet[$node.IP] = $subnet.CIDR
+                    $subnetNodeCount[$subnet.CIDR]++
+                    break
+                }
+            }
+        }
+
+        # Add subnet containers. Each row starts below the tallest container in the
+        # previous row, so dense subnets cannot overlap the row beneath them.
         $containerID = $nextID
         $subnetContainers = @{}
+        $containerIndex = 0
+        $containerRowY = 20
+        $containerRowHeight = 0
 
         foreach ($subnet in $Topology.Subnets) {
             $subnetLabel = [System.Security.SecurityElement]::Escape("$($subnet.Label)`n$($subnet.CIDR)")
             $containerStyle = 'swimlane;fontSize=14;fontStyle=1;fillColor=#f5f5f5;strokeColor=#666666;rounded=1;'
 
-            # Calculate container size based on nodes in subnet
+            $column = $containerIndex % 2
+            if ($column -eq 0 -and $containerIndex -gt 0) {
+                $containerRowY += $containerRowHeight + 50
+                $containerRowHeight = 0
+            }
+
+            $nodeRows = [Math]::Ceiling($subnetNodeCount[$subnet.CIDR] / 4.0)
             $containerWidth = 800
-            $containerHeight = 550
-            $containerX = 20 + (($subnetContainers.Count % 2) * 850)
-            $containerY = 20 + ([Math]::Floor($subnetContainers.Count / 2) * 600)
+            $containerHeight = [Math]::Max(140, 40 + ([int]$nodeRows * 110))
+            $containerX = 20 + ($column * 850)
+            $containerY = $containerRowY
+            $containerRowHeight = [Math]::Max($containerRowHeight, $containerHeight)
 
             $null = $xml.AppendLine("        <mxCell id=`"$containerID`" value=`"$subnetLabel`" style=`"$containerStyle`" parent=`"1`" vertex=`"1`">")
             $null = $xml.AppendLine("          <mxGeometry x=`"$containerX`" y=`"$containerY`" width=`"$containerWidth`" height=`"$containerHeight`" as=`"geometry`"/>")
@@ -812,27 +991,28 @@ function Export-DrawIO {
 
             $subnetContainers[$subnet.CIDR] = $containerID
             $containerID++
+            $containerIndex++
         }
 
         $nextID = $containerID
 
-        # Map each node to the first subnet container whose CIDR contains it, so nodes
-        # are parented/positioned inside the right swimlane instead of always parent="1".
+        # Map assigned subnet CIDRs to their emitted container IDs.
         $nodeContainer = @{}
         foreach ($node in $uniqueNodes) {
-            foreach ($subnet in $Topology.Subnets) {
-                if ($subnetContainers.ContainsKey($subnet.CIDR) -and (Test-IPInSubnet -IP $node.IP -CIDR $subnet.CIDR)) {
-                    $nodeContainer[$node.IP] = $subnetContainers[$subnet.CIDR]
-                    break
-                }
+            if ($nodeSubnet.ContainsKey($node.IP)) {
+                $nodeContainer[$node.IP] = $subnetContainers[$nodeSubnet[$node.IP]]
             }
         }
 
         # Layout bookkeeping: per-container child index, and a base Y for unmatched
         # (canvas-level) nodes placed below the container grid so nothing overlaps.
         $containerChildCount = @{}
-        $containerRows = [Math]::Ceiling($subnetContainers.Count / 2.0)
-        $unmatchedBaseY = 20 + ([int]$containerRows * 600) + 40
+        $unmatchedBaseY = if ($subnetContainers.Count -gt 0) {
+            $containerRowY + $containerRowHeight + 40
+        }
+        else {
+            20
+        }
 
         # Add nodes with enhanced styles and metadata
         foreach ($layer in $layerOrder) {
@@ -872,13 +1052,21 @@ function Export-DrawIO {
                     default         { @{ shape='rectangle'; fillColor='#e1e1e1'; strokeColor='#999999' } }
                 }
 
-                # Override fill color for reachability status
+                # Status is tri-state and controls the status color consistently.
                 if ($node.Reachable -eq $true) {
+                    $status = 'Reachable'
                     $shapeConfig.fillColor = '#d5e8d4'
                     $shapeConfig.strokeColor = '#82b366'
-                } elseif ($node.Reachable -eq $false) {
+                }
+                elseif ($node.Reachable -eq $false) {
+                    $status = 'Unreachable'
                     $shapeConfig.fillColor = '#f8cecc'
                     $shapeConfig.strokeColor = '#b85450'
+                }
+                else {
+                    $status = 'Unknown'
+                    $shapeConfig.fillColor = '#f5f5f5'
+                    $shapeConfig.strokeColor = '#666666'
                 }
 
                 # Node label with better formatting (escape entire label for XML)
@@ -886,7 +1074,7 @@ function Export-DrawIO {
                 if ($node.IP -ne $node.Hostname) {
                     $labelText += "`n$($node.IP)"
                 }
-                $label = [System.Security.SecurityElement]::Escape($labelText)
+                $label = ([System.Security.SecurityElement]::Escape($labelText)) -replace "`n", '&#xa;'
 
                 # Build enhanced style with shadow and rounded corners
                 $nodeStyle = "shape=$($shapeConfig.shape);rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=top;"
@@ -901,16 +1089,21 @@ function Export-DrawIO {
                     "Vendor: $($node.Vendor)",
                     "OS: $($node.OS)",
                     "Layer: $($node.Layer)",
-                    "Status: $(if ($node.Reachable) { 'Reachable' } else { 'Unreachable' })"
+                    "Status: $status"
                 )
-                $tooltip = [System.Security.SecurityElement]::Escape(($tooltipParts -join "`n"))
+                $tooltip = ([System.Security.SecurityElement]::Escape(($tooltipParts -join "`n"))) -replace "`n", '&#xa;'
+                $ipAttribute = [System.Security.SecurityElement]::Escape([string]$node.IP)
+                $hostnameAttribute = [System.Security.SecurityElement]::Escape([string]$node.Hostname)
+                $roleAttribute = [System.Security.SecurityElement]::Escape([string]$node.Role)
+                $vendorAttribute = [System.Security.SecurityElement]::Escape([string]$node.Vendor)
+                $osAttribute = [System.Security.SecurityElement]::Escape([string]$node.OS)
+                $layerAttribute = [System.Security.SecurityElement]::Escape([string]$node.Layer)
 
-                $null = $xml.AppendLine("        <mxCell id=`"$nodeID`" value=`"$label`" style=`"$nodeStyle`" parent=`"$parentID`" vertex=`"1`">")
-                $null = $xml.AppendLine("          <mxGeometry x=`"$xPos`" y=`"$yPos`" width=`"140`" height=`"80`" as=`"geometry`"/>")
-                $null = $xml.AppendLine('        </mxCell>')
-
-                # Add custom metadata as UserObject (best practice)
-                # Note: In production, this would replace the mxCell with UserObject, but keeping it simple for MVP
+                $null = $xml.AppendLine("        <UserObject id=`"$nodeID`" label=`"$label`" tooltip=`"$tooltip`" ip=`"$ipAttribute`" hostname=`"$hostnameAttribute`" role=`"$roleAttribute`" vendor=`"$vendorAttribute`" os=`"$osAttribute`" layer=`"$layerAttribute`" status=`"$status`">")
+                $null = $xml.AppendLine("          <mxCell style=`"$nodeStyle`" parent=`"$parentID`" vertex=`"1`">")
+                $null = $xml.AppendLine("            <mxGeometry x=`"$xPos`" y=`"$yPos`" width=`"140`" height=`"80`" as=`"geometry`"/>")
+                $null = $xml.AppendLine('          </mxCell>')
+                $null = $xml.AppendLine('        </UserObject>')
             }
         }
 
@@ -944,6 +1137,12 @@ function Export-DrawIO {
                 # L2-SNMP: Solid line, green, thicker (verified connection)
                 $edgeStyle += 'strokeColor=#2D7600;strokeWidth=2.5;'
                 $edgeStyle += 'endArrow=classic;endFill=1;'
+            }
+            elseif ($confidence -eq 'L2-SNMP-Heuristic') {
+                # Provisional SNMP hint: amber and dashed, visually distinct from
+                # verified physical topology.
+                $edgeStyle += 'strokeColor=#B26A00;strokeWidth=2;dashed=1;dashPattern=8 4;'
+                $edgeStyle += 'endArrow=classic;endFill=0;'
             }
             elseif ($confidence -eq 'L3-Inferred') {
                 # L3-Inferred: Dashed line, gray (inferred connection)
@@ -1002,7 +1201,7 @@ function Export-Metadata {
     .EXAMPLE
         $topo | Export-Metadata -OutFile '.\scanmeta.json'
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
         [Parameter(Mandatory, ValueFromPipeline)]
         [pscustomobject]$Topology,
@@ -1011,12 +1210,22 @@ function Export-Metadata {
         [string]$OutFile,
 
         [Parameter()]
-        [string[]]$CredSetsUsed = @()
+        [string[]]$CredSetsUsed = @(),
+
+        [Parameter()]
+        [switch]$Force
     )
 
     process {
         if ($null -eq $Topology) {
             throw "Invalid topology object"
+        }
+
+        if ((Test-Path -LiteralPath $OutFile) -and -not $Force) {
+            throw "File '$OutFile' already exists. Use -Force to overwrite."
+        }
+        if (-not $PSCmdlet.ShouldProcess($OutFile, 'Export-Metadata')) {
+            return
         }
 
         # Calculate confidence counts
@@ -1051,6 +1260,96 @@ function Export-Metadata {
             throw "Failed to write metadata file: $_"
         }
     }
+}
+
+#endregion
+
+#region Topology Persistence
+
+function Export-Topology {
+    <#
+    .SYNOPSIS
+        Persists a topology object to JSON
+    .DESCRIPTION
+        Writes the full topology (Nodes, Edges, Subnets) to a JSON file at
+        an explicit depth so nested edge properties survive the round trip.
+    .PARAMETER Topology
+        Topology object with Nodes, Edges, Subnets
+    .PARAMETER OutFile
+        Output path for topology JSON
+    .PARAMETER Force
+        Overwrite an existing file
+    .EXAMPLE
+        $topo | Export-Topology -OutFile '.\topo.json'
+        $topo | Export-Topology -OutFile '.\topo.json' -Force
+    #>
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [pscustomobject]$Topology,
+
+        [Parameter(Mandatory)]
+        [string]$OutFile,
+
+        [Parameter()]
+        [switch]$Force
+    )
+
+    process {
+        if ($null -eq $Topology) {
+            throw "Invalid topology object"
+        }
+        if ((Test-Path -LiteralPath $OutFile) -and -not $Force) {
+            throw "File '$OutFile' already exists. Use -Force to overwrite."
+        }
+        if (-not $PSCmdlet.ShouldProcess($OutFile, 'Export-Topology')) {
+            return
+        }
+        try {
+            $Topology | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            Write-Verbose "Exported topology to $OutFile"
+        }
+        catch {
+            throw "Failed to write topology file: $_"
+        }
+    }
+}
+
+function Import-Topology {
+    <#
+    .SYNOPSIS
+        Loads a topology object from JSON
+    .DESCRIPTION
+        Reads a JSON file written by Export-Topology and returns a topology
+        object with Nodes, Edges, Subnets. Validates the required shape.
+    .PARAMETER Path
+        Path to topology JSON file
+    .EXAMPLE
+        $topo = Import-Topology -Path '.\topo.json'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Topology file not found: '$Path'"
+    }
+    try {
+        $data = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse topology file '$Path': $_"
+    }
+    if ($null -eq $data.PSObject.Properties['Nodes']) {
+        throw "Invalid topology file '$Path': missing required property 'Nodes'."
+    }
+    # Normalize to arrays so callers can count safely
+    if ($null -eq $data.Nodes) { $data.Nodes = @() }
+    if ($null -eq $data.Edges) { $data.Edges = @() }
+    if ($null -eq $data.Subnets) { $data.Subnets = @() }
+    return $data
 }
 
 #endregion
@@ -1097,12 +1396,12 @@ function Compare-NetworkScans {
         [string]$OutFile
     )
 
-    # Load files
+    # Load files (topology via Import-Topology for validation)
     try {
         $baseMeta = Get-Content -Path $BaselineMetadata -Raw | ConvertFrom-Json
-        $baseTopoData = Get-Content -Path $BaselineTopology -Raw | ConvertFrom-Json
+        $baseTopoData = Import-Topology -Path $BaselineTopology
         $currMeta = Get-Content -Path $CurrentMetadata -Raw | ConvertFrom-Json
-        $currTopoData = Get-Content -Path $CurrentTopology -Raw | ConvertFrom-Json
+        $currTopoData = Import-Topology -Path $CurrentTopology
     }
     catch {
         throw "Failed to load comparison files: $_"
@@ -1251,6 +1550,53 @@ function Compare-NetworkScans {
 
 #region Level 1: Credential-Free Discovery Functions
 
+function ConvertFrom-ArpText {
+    param(
+        [Parameter(Mandatory)][string[]]$Lines,
+        [Parameter(Mandatory)][ValidateSet('MacOS', 'LinuxIp', 'LinuxArp')][string]$Format,
+        [string]$InterfaceAlias
+    )
+
+    foreach ($line in $Lines) {
+        $entry = $null
+        if ($Format -eq 'MacOS') {
+            if ($line -notmatch '\s+at\s+') { continue }
+            if ($line -match '\s+at\s+\(incomplete\)') { continue }
+            if ($line -notmatch '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]{17})\s+on\s+(\S+)') {
+                throw "Unable to parse macOS ARP entry: $line"
+            }
+            $entry = [pscustomobject]@{
+                IPAddress = $matches[1]; MACAddress = $matches[2].ToUpperInvariant()
+                State = 'Reachable'; InterfaceAlias = $matches[3]; InterfaceIndex = $null
+            }
+        }
+        elseif ($Format -eq 'LinuxIp') {
+            if ($line -notmatch '\s+lladdr\s+') { continue }
+            if ($line -notmatch '^(\d+\.\d+\.\d+\.\d+)\s+dev\s+(\S+)\s+lladdr\s+([0-9a-fA-F:]{17})\s+(\S+)') {
+                throw "Unable to parse Linux ip-neigh entry: $line"
+            }
+            $entry = [pscustomobject]@{
+                IPAddress = $matches[1]; MACAddress = $matches[3].ToUpperInvariant()
+                State = $matches[4]; InterfaceAlias = $matches[2]; InterfaceIndex = $null
+            }
+        }
+        else {
+            if ($line -notmatch '\s+at\s+') { continue }
+            if ($line -notmatch '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]{17})') {
+                throw "Unable to parse Linux arp entry: $line"
+            }
+            $entry = [pscustomobject]@{
+                IPAddress = $matches[1]; MACAddress = $matches[2].ToUpperInvariant()
+                State = 'Reachable'; InterfaceAlias = $null; InterfaceIndex = $null
+            }
+        }
+
+        if (-not $InterfaceAlias -or $entry.InterfaceAlias -eq $InterfaceAlias) {
+            $entry
+        }
+    }
+}
+
 function Get-LocalARPTable {
     <#
     .SYNOPSIS
@@ -1258,6 +1604,8 @@ function Get-LocalARPTable {
     .DESCRIPTION
         Parses the ARP cache to find MAC addresses and IP addresses of devices
         that have recently communicated with this host. No credentials required.
+        Missing platform commands, command failures, and recognized-but-malformed
+        neighbor lines produce terminating errors instead of an empty-cache result.
     .PARAMETER InterfaceAlias
         Optional network interface to filter results
     .EXAMPLE
@@ -1275,12 +1623,11 @@ function Get-LocalARPTable {
         [string]$InterfaceAlias
     )
 
-    try {
-        $arpEntries = @()
-        
-        if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindows) {
+    $arpEntries = @()
+
+    if ($IsWindows) {
             # Windows: Use Get-NetNeighbor
-            $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue
+            $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction Stop
 
             if ($InterfaceAlias) {
                 $neighbors = $neighbors | Where-Object { $_.InterfaceAlias -eq $InterfaceAlias }
@@ -1295,74 +1642,67 @@ function Get-LocalARPTable {
                     InterfaceIndex  = $entry.InterfaceIndex
                 }
             }
-        } elseif ($IsMacOS) {
-            # macOS: Parse arp -an
+    }
+    elseif ($IsMacOS) {
+            $null = Get-Command arp -CommandType Application -ErrorAction Stop
             $arpOutput = & arp -an 2>&1
-            foreach ($line in $arpOutput) {
-                # Format: ? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]
-                if ($line -match '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)\s+on\s+(\w+)') {
-                    $ip = $matches[1]
-                    $mac = $matches[2]
-                    $interface = $matches[3]
-                    
-                    if (-not $InterfaceAlias -or $interface -eq $InterfaceAlias) {
-                        $arpEntries += [pscustomobject]@{
-                            IPAddress       = $ip
-                            MACAddress      = $mac
-                            State           = 'Reachable'
-                            InterfaceAlias  = $interface
-                            InterfaceIndex  = $null
-                        }
-                    }
-                }
+            if ($LASTEXITCODE -ne 0) {
+                throw "arp -an failed with exit code $LASTEXITCODE"
             }
-        } elseif ($IsLinux) {
-            # Linux: Parse ip neigh or arp
-            $neighborOutput = & ip neigh show 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                # Use ip neigh
-                foreach ($line in $neighborOutput) {
-                    # Format: 192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
-                    if ($line -match '(\d+\.\d+\.\d+\.\d+)\s+dev\s+(\w+)\s+lladdr\s+([0-9a-f:]+)\s+(\w+)') {
-                        $ip = $matches[1]
-                        $interface = $matches[2]
-                        $mac = $matches[3]
-                        $state = $matches[4]
-                        
-                        if (-not $InterfaceAlias -or $interface -eq $InterfaceAlias) {
-                            $arpEntries += [pscustomobject]@{
-                                IPAddress       = $ip
-                                MACAddress      = $mac
-                                State           = $state
-                                InterfaceAlias  = $interface
-                                InterfaceIndex  = $null
-                            }
-                        }
-                    }
+            $arpEntries = @(ConvertFrom-ArpText -Lines $arpOutput -Format MacOS -InterfaceAlias $InterfaceAlias)
+    }
+    elseif ($IsLinux) {
+            $ipCommand = Get-Command ip -CommandType Application -ErrorAction SilentlyContinue
+            if ($ipCommand) {
+                $neighborOutput = & $ipCommand.Source neigh show 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "ip neigh show failed with exit code $LASTEXITCODE"
                 }
-            } else {
-                # Fallback to arp command
-                $arpOutput = & arp -an 2>&1
-                foreach ($line in $arpOutput) {
-                    if ($line -match '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)') {
-                        $arpEntries += [pscustomobject]@{
-                            IPAddress       = $matches[1]
-                            MACAddress      = $matches[2]
-                            State           = 'Reachable'
-                            InterfaceAlias  = $null
-                            InterfaceIndex  = $null
-                        }
-                    }
+                $arpEntries = @(ConvertFrom-ArpText -Lines $neighborOutput -Format LinuxIp -InterfaceAlias $InterfaceAlias)
+            }
+            else {
+                $arpCommand = Get-Command arp -CommandType Application -ErrorAction Stop
+                $arpOutput = & $arpCommand.Source -an 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "arp -an failed with exit code $LASTEXITCODE"
                 }
+                $arpEntries = @(ConvertFrom-ArpText -Lines $arpOutput -Format LinuxArp -InterfaceAlias $InterfaceAlias)
+            }
+    }
+
+    Write-Verbose "Found $($arpEntries.Count) ARP entries"
+    return $arpEntries
+}
+
+function Wait-DnsLookupTask {
+    param(
+        [Parameter(Mandatory)][System.Threading.Tasks.Task]$LookupTask,
+        [Parameter(Mandatory)][string]$IPAddress,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+
+    try {
+        if ($LookupTask.Wait([TimeSpan]::FromSeconds($TimeoutSeconds))) {
+            $result = $LookupTask.Result
+            return [pscustomobject]@{
+                IPAddress = $IPAddress
+                Hostname  = $result.HostName
+                Aliases   = $result.Aliases
+                Success   = $true
             }
         }
 
-        Write-Verbose "Found $($arpEntries.Count) ARP entries"
-        return $arpEntries
+        Write-Verbose "DNS lookup for $IPAddress timed out after $TimeoutSeconds second(s)"
     }
     catch {
-        Write-Warning "Failed to retrieve ARP table: $_"
-        return @()
+        Write-Verbose "DNS lookup for $IPAddress failed: $($_.Exception.Message)"
+    }
+
+    return [pscustomobject]@{
+        IPAddress = $IPAddress
+        Hostname  = $null
+        Aliases   = @()
+        Success   = $false
     }
 }
 
@@ -1406,25 +1746,7 @@ function Resolve-IPHostname {
                 # pipeline. On timeout we return a failure object (the background task
                 # is abandoned).
                 $task = [System.Net.Dns]::GetHostEntryAsync($ip)
-
-                if ($task.Wait([TimeSpan]::FromSeconds($TimeoutSeconds))) {
-                    $result = $task.Result
-                    [pscustomobject]@{
-                        IPAddress = $ip
-                        Hostname  = $result.HostName
-                        Aliases   = $result.Aliases
-                        Success   = $true
-                    }
-                }
-                else {
-                    Write-Verbose "DNS lookup for $ip timed out after $TimeoutSeconds second(s)"
-                    [pscustomobject]@{
-                        IPAddress = $ip
-                        Hostname  = $null
-                        Aliases   = @()
-                        Success   = $false
-                    }
-                }
+                Wait-DnsLookupTask -LookupTask $task -IPAddress $ip -TimeoutSeconds $TimeoutSeconds
             }
             catch {
                 [pscustomobject]@{
@@ -1746,5 +2068,7 @@ Export-ModuleMember -Function @(
     # Export and Analysis
     'Export-DrawIO'
     'Export-Metadata'
+    'Export-Topology'
+    'Import-Topology'
     'Compare-NetworkScans'
 )

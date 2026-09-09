@@ -3,9 +3,10 @@ function Export-NetBox {
     .SYNOPSIS
         Exports topology to NetBox bulk-import CSV
     .DESCRIPTION
-        Writes devices CSV for NetBox with columns name,role,manufacturer,device_type,site,status,primary_ip4.
+        Writes devices CSV for NetBox with columns name,role,manufacturer,device_type,site,status,primary_ip4,primary_ip6.
         Role mapping: router/core-router->router, switch/distribution->switch, server->server, workstation->workstation.
-        Vendor Unknown -> empty manufacturer. Reachable true->active else offline.
+        Vendor Unknown -> empty manufacturer. Reachable true->active, false->offline; $null leaves status empty
+        (NetBox has no unknown). Each node has one identity IP: IPv4 -> primary_ip4, IPv6 -> primary_ip6.
     .PARAMETER Topology
         Topology object with Nodes
     .PARAMETER OutFile
@@ -58,7 +59,18 @@ function Export-NetBox {
             $mappedRole = if ($roleMap.ContainsKey($roleKey)) { $roleMap[$roleKey] } else { 'unknown' }
             $manufacturer = if ($node.PSObject.Properties['Vendor'] -and $node.Vendor -and $node.Vendor -ne 'Unknown') { [string]$node.Vendor } else { '' }
             $deviceType = if ($node.PSObject.Properties['OS'] -and $node.OS -and $node.OS -ne 'Unknown') { [string]$node.OS } else { 'unknown' }
-            $status = if ($node.Reachable -eq $true) { 'active' } else { 'offline' }
+            $status = if ($node.Reachable -eq $true) { 'active' } elseif ($node.Reachable -eq $false) { 'offline' } else { '' }
+            $primaryIp4 = ''
+            $primaryIp6 = ''
+            $parsedIp = $null
+            if ([System.Net.IPAddress]::TryParse([string]$node.IP, [ref]$parsedIp)) {
+                if ($parsedIp.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+                    $primaryIp6 = [string]$node.IP
+                }
+                elseif ($parsedIp.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    $primaryIp4 = [string]$node.IP
+                }
+            }
             [pscustomobject]@{
                 name         = [string]$node.Hostname
                 role         = $mappedRole
@@ -66,12 +78,13 @@ function Export-NetBox {
                 device_type  = $deviceType
                 site         = $Site
                 status       = $status
-                primary_ip4  = [string]$node.IP
+                primary_ip4  = $primaryIp4
+                primary_ip6  = $primaryIp6
             }
         }
 
         if ($null -eq $rows -or @($rows).Count -eq 0) {
-            'name,role,manufacturer,device_type,site,status,primary_ip4' | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            'name,role,manufacturer,device_type,site,status,primary_ip4,primary_ip6' | Out-File -FilePath $OutFile -Encoding utf8 -Force
         }
         else {
             $rows | Export-Csv -LiteralPath $OutFile -NoTypeInformation -Encoding utf8 -Force

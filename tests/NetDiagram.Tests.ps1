@@ -476,7 +476,7 @@ Describe 'Export-NodeInventoryCsv (#41 regression)' {
         $topo = Import-Inventory -Path $script:TestInventoryPath
         $path = Join-Path $script:TestDataPath 'nodes.csv'
         $topo | Export-NodeInventoryCsv -OutFile $path -Force
-        $header = (Get-Content $path -TotalCount 1).Trim()
+        $header = ((Get-Content $path -TotalCount 1) -replace '"','').Trim()
         $header | Should -Be 'IP,Hostname,Role,Layer,Vendor,OS,Reachable,MACAddress,OpenPorts'
     }
 

@@ -413,7 +413,9 @@ Check the `examples/` directory:
 | `workstation` | `workstation` |
 | *(other)* | `unknown` |
 
-Reachable `true` → `active`, else `offline`; Vendor `Unknown` → empty `manufacturer`.
+Reachable `true` → `active`, `false` → `offline`, `$null` → empty `status`.
+IPv4 identity → `primary_ip4`; IPv6 identity → `primary_ip6` (the other column empty).
+Vendor `Unknown` → empty `manufacturer`.
 
 ---
 

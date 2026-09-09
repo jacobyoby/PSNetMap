@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `actions/checkout@v7`, and asserts offline dual-stack DrawIO parenting.
 
 ### Fixed
+- **`Export-NetBox` IPv6 and unknown reachability.** IPv6 identity addresses
+  go in `primary_ip6` (v6-only leaves `primary_ip4` empty). `Reachable=$null`
+  no longer maps to `offline`; status is left empty (NetBox has no unknown).
 - **`Export-DrawIO` L2-FDB edge style.** Bridge forwarding-table edges (`Confidence='L2-FDB'`)
   were falling through to the gray dotted “unknown” default. They now use a dedicated
   solid teal stroke (between verified L2-SNMP green and dashed amber heuristic).

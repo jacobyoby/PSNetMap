@@ -2110,7 +2110,7 @@ Describe 'Export-NetBox (#38 regression)' {
         $path = Join-Path $script:TestDataPath 'netbox.csv'
         $topo | Export-NetBox -OutFile $path -Site 'HQ' -Force
         $header = (Get-Content $path -TotalCount 1) -replace '"',''
-        $header | Should -Be 'name,role,manufacturer,device_type,site,status,primary_ip4'
+        $header | Should -Be 'name,role,manufacturer,device_type,site,status,primary_ip4,primary_ip6'
         $rows = Import-Csv $path
         $rows.Count | Should -Be 6
         ($rows | Where-Object name -eq 'r1').role | Should -Be 'router'
@@ -2118,7 +2118,7 @@ Describe 'Export-NetBox (#38 regression)' {
         ($rows | Where-Object name -eq 'srv,1').name | Should -Be 'srv,1'
         ($rows | Where-Object name -eq 'r1').status | Should -Be 'active'
         ($rows | Where-Object name -eq 's1').status | Should -Be 'offline'
-        ($rows | Where-Object name -eq 'srv,1').status | Should -Be 'offline'
+        ($rows | Where-Object name -eq 'srv,1').status | Should -Be ''
         ($rows | Where-Object name -eq 'd1').role | Should -Be 'switch'
         ($rows | Where-Object primary_ip4 -eq '10.0.0.4').role | Should -Be 'workstation'
     }
@@ -2128,10 +2128,81 @@ Describe 'Export-NetBox (#38 regression)' {
         $path = Join-Path $script:TestDataPath 'netbox-empty.csv'
         $topo | Export-NetBox -OutFile $path -Site 'HQ' -Force
         (Get-Content $path | Measure-Object).Count | Should -Be 1
+        ((Get-Content $path -TotalCount 1) -replace '"','') | Should -Be 'name,role,manufacturer,device_type,site,status,primary_ip4,primary_ip6'
         { $topo | Export-NetBox -OutFile $path -Site 'HQ' } | Should -Throw "*already exists*Use -Force*"
         $whatIf = Join-Path $script:TestDataPath 'netbox-whatif.csv'
         $topo | Export-NetBox -OutFile $whatIf -Site 'HQ' -WhatIf
         Test-Path $whatIf | Should -Be $false
+    }
+}
+
+Describe 'Export-NetBox (#72 IPv6 columns and unknown reachability)' {
+    It 'Puts an IPv6-only node in primary_ip6 and leaves primary_ip4 empty' {
+        $topo = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='2001:db8::1'; Hostname='v6-router'; Role='router'; Vendor='Cisco'; OS='IOS'; Layer='Core'; Reachable=$true }
+            )
+            Edges=@(); Subnets=@()
+        }
+        $path = Join-Path $script:TestDataPath 'netbox-v6-only.csv'
+        $topo | Export-NetBox -OutFile $path -Site 'Lab' -Force
+        $row = Import-Csv $path
+        $row.primary_ip6 | Should -Be '2001:db8::1'
+        $row.primary_ip4 | Should -Be ''
+        $row.status | Should -Be 'active'
+    }
+
+    It 'Leaves IPv4-only nodes in primary_ip4 with empty primary_ip6' {
+        $topo = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='192.0.2.10'; Hostname='v4-server'; Role='server'; Vendor='Dell'; OS='Ubuntu'; Layer='Servers'; Reachable=$false }
+            )
+            Edges=@(); Subnets=@()
+        }
+        $path = Join-Path $script:TestDataPath 'netbox-v4-only.csv'
+        $topo | Export-NetBox -OutFile $path -Site 'Lab' -Force
+        $row = Import-Csv $path
+        $row.primary_ip4 | Should -Be '192.0.2.10'
+        $row.primary_ip6 | Should -Be ''
+        $row.status | Should -Be 'offline'
+    }
+
+    It 'Maps a dual-stack fixture by address family (one identity IP per node)' {
+        $topo = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='192.0.2.20'; Hostname='dual-v4'; Role='router'; Vendor='Cisco'; OS='IOS'; Layer='Core'; Reachable=$true }
+                [pscustomobject]@{ IP='2001:db8::20'; Hostname='dual-v6'; Role='router'; Vendor='Cisco'; OS='IOS'; Layer='Core'; Reachable=$true }
+            )
+            Edges=@(); Subnets=@()
+        }
+        $path = Join-Path $script:TestDataPath 'netbox-dual-stack.csv'
+        $topo | Export-NetBox -OutFile $path -Site 'Lab' -Force
+        $header = (Get-Content $path -TotalCount 1) -replace '"',''
+        $header | Should -Be 'name,role,manufacturer,device_type,site,status,primary_ip4,primary_ip6'
+        $rows = Import-Csv $path
+        $v4 = $rows | Where-Object name -eq 'dual-v4'
+        $v6 = $rows | Where-Object name -eq 'dual-v6'
+        $v4.primary_ip4 | Should -Be '192.0.2.20'
+        $v4.primary_ip6 | Should -Be ''
+        $v6.primary_ip4 | Should -Be ''
+        $v6.primary_ip6 | Should -Be '2001:db8::20'
+    }
+
+    It 'Does not export Reachable=$null as offline' {
+        $topo = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='192.0.2.30'; Hostname='untested-v4'; Role='switch'; Vendor='X'; OS='X'; Layer='Access'; Reachable=$null }
+                [pscustomobject]@{ IP='2001:db8::30'; Hostname='untested-v6'; Role='switch'; Vendor='X'; OS='X'; Layer='Access'; Reachable=$null }
+            )
+            Edges=@(); Subnets=@()
+        }
+        $path = Join-Path $script:TestDataPath 'netbox-null-reachable.csv'
+        $topo | Export-NetBox -OutFile $path -Site 'Lab' -Force
+        $rows = Import-Csv $path
+        foreach ($row in $rows) {
+            $row.status | Should -Be ''
+            $row.status | Should -Not -Be 'offline'
+        }
     }
 }
 

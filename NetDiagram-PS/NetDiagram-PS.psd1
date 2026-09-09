@@ -30,6 +30,7 @@
 
         # Export and Analysis
         'Export-DrawIO'
+        'Export-Mermaid'
         'Export-Metadata'
         'Export-Topology'
         'Import-Topology'

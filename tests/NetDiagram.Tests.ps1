@@ -58,6 +58,7 @@ Describe 'Module Import' {
         $commandNames | Should -Contain 'Export-Topology'
         $commandNames | Should -Contain 'Import-Topology'
         $commandNames | Should -Contain 'Export-NodeInventoryCsv'
+        $commandNames | Should -Contain 'Export-Mermaid'
         $commandNames | Should -Contain 'Import-NmapScan'
         $commandNames | Should -Contain 'Compare-NetworkScans'
     }
@@ -1436,6 +1437,43 @@ Describe 'Invoke-NetworkDiscovery (#35 regression)' {
         $path = Join-Path $script:TestDataPath 'discovery.drawio'
         $topo | Export-DrawIO -OutFile $path -Force
         Test-Path $path | Should -Be $true
+    }
+}
+
+Describe 'Export-Mermaid (#37 regression)' {
+    It 'Begins with flowchart LR and maps nodes/edges with confidence styles' {
+        $topo = [pscustomobject]@{
+            Nodes = @(
+                [pscustomobject]@{ IP='10.0.0.1'; Hostname='gw"bad'; Role='unknown'; Layer='Core'; Vendor='X'; OS='X'; Reachable=$null }
+                [pscustomobject]@{ IP='10.0.0.2'; Hostname='sw'; Role='unknown'; Layer='Access'; Vendor='X'; OS='X'; Reachable=$null }
+            )
+            Edges = @(
+                [pscustomobject]@{ SourceIP='10.0.0.1'; TargetIP='10.0.0.2'; Label='uplink'; Confidence='L2-SNMP' }
+                [pscustomobject]@{ SourceIP='10.0.0.2'; TargetIP='10.0.0.1'; Label='back'; Confidence='L3-Inferred' }
+            )
+            Subnets = @(
+                [pscustomobject]@{ CIDR='10.0.0.0/24'; Label='NetA'; VLAN=1 }
+            )
+        }
+        $path = Join-Path $script:TestDataPath 'test.mmd'
+        $topo | Export-Mermaid -OutFile $path -Force
+        $content = Get-Content $path -Raw
+        $content | Should -Match '^flowchart LR'
+        ($content | Select-String -Pattern '10_0_0_1' -AllMatches).Matches.Count | Should -BeGreaterThan 0
+        $content | Should -Match '-->'
+        $content | Should -Match '-.->'
+        $content | Should -Match 'subgraph'
+        $content | Should -Not -Match '"bad'
+    }
+
+    It 'Respects -Force and -WhatIf' {
+        $topo = Invoke-NetworkDiscovery -Cidr '10.0.1.0/24' -ScanDepth Quick
+        $path = Join-Path $script:TestDataPath 'mermaid-force.mmd'
+        $topo | Export-Mermaid -OutFile $path -Force
+        { $topo | Export-Mermaid -OutFile $path } | Should -Throw "*already exists*Use -Force*"
+        $whatIf = Join-Path $script:TestDataPath 'mermaid-whatif.mmd'
+        $topo | Export-Mermaid -OutFile $whatIf -WhatIf
+        Test-Path $whatIf | Should -Be $false
     }
 }
 

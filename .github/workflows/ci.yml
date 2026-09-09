@@ -132,33 +132,40 @@ jobs:
             $topo2 | ConvertTo-Json -Depth 10 | Out-File -FilePath $currTopo -Encoding utf8
             $diff = Compare-NetworkScans -BaselineMetadata $baselineMeta -BaselineTopology $baselineTopo -CurrentMetadata $currMeta -CurrentTopology $currTopo
             Write-Host "Compare-NetworkScans OK: $($diff | ConvertTo-Json -Depth 5)"
-            # Dual-stack DrawIO: Import-Inventory is IPv4-only; persist via topology JSON.
-            $v6Path = Join-Path $tmp 'smoke-ipv6-topo.json'
-            @{
-              Nodes = @(
-                @{ IP = '2001:db8::10'; Hostname = 'v6-node'; Role = 'switch'; Vendor = 'Cisco'; OS = 'IOS'; Layer = 'Access'; Reachable = $null }
-                @{ IP = '10.0.0.1'; Hostname = 'gw'; Role = 'core-router'; Vendor = 'Cisco'; OS = 'IOS'; Layer = 'Core'; Reachable = $null }
+            # Dual-stack DrawIO via Import-Inventory (v4 + v6 node/subnet; no hand-built topology).
+            $dualInv = @{
+              knownDevices = @(
+                @{ ip='10.0.0.1'; hostname='gw'; role='core-router'; vendor='Cisco' }
+                @{ ip='2001:db8::10'; hostname='v6-node'; role='switch'; vendor='Cisco' }
               )
-              Edges = @()
-              Subnets = @(
-                @{ CIDR = '2001:db8::/32'; Label = 'SmokeV6'; VLAN = 100 }
-                @{ CIDR = '10.0.0.0/24'; Label = 'SmokeNet'; VLAN = 1 }
+              subnets = @(
+                @{ cidr='10.0.0.0/24'; label='SmokeNet'; vlan=1 }
+                @{ cidr='2001:db8::/32'; label='SmokeV6'; vlan=100 }
               )
-            } | ConvertTo-Json -Depth 10 | Out-File -FilePath $v6Path -Encoding utf8
-            $v6Topo = Import-Topology -Path $v6Path
-            $v6Drawio = Join-Path $tmp 'smoke-ipv6.drawio'
-            $v6Topo | Export-DrawIO -OutFile $v6Drawio
-            if (-not (Test-Path $v6Drawio)) { throw 'Export-DrawIO did not create IPv6 file' }
-            $v6xmlRaw = Get-Content $v6Drawio -Raw
-            if ($v6xmlRaw -notmatch [regex]::Escape('2001:db8::10')) { throw 'Export-DrawIO missing IPv6 address' }
-            $v6xml = [xml]$v6xmlRaw
-            $v6node = $v6xml.SelectSingleNode("//UserObject[@ip='2001:db8::10']")
+            }
+            $dualPath = Join-Path $tmp 'inventory-dual.json'
+            $dualInv | ConvertTo-Json -Depth 10 | Out-File -FilePath $dualPath -Encoding utf8
+            $dualTopo = Import-Inventory -Path $dualPath
+            $dualIps = @($dualTopo.Nodes.IP)
+            if ($dualIps -notcontains '10.0.0.1' -or $dualIps -notcontains '2001:db8::10') {
+              throw "Import-Inventory missing dual-stack node IPs: $($dualIps -join ', ')"
+            }
+            $dualDrawio = Join-Path $tmp 'smoke-dual.drawio'
+            $dualTopo | Export-DrawIO -OutFile $dualDrawio
+            if (-not (Test-Path $dualDrawio)) { throw 'Export-DrawIO did not create dual-stack file' }
+            $dualXmlRaw = Get-Content $dualDrawio -Raw
+            if ($dualXmlRaw -notmatch [regex]::Escape('10.0.0.1')) { throw 'Export-DrawIO missing IPv4 address' }
+            if ($dualXmlRaw -notmatch [regex]::Escape('2001:db8::10')) { throw 'Export-DrawIO missing IPv6 address' }
+            $dualXml = [xml]$dualXmlRaw
+            $v4node = $dualXml.SelectSingleNode("//UserObject[@ip='10.0.0.1']")
+            $v6node = $dualXml.SelectSingleNode("//UserObject[@ip='2001:db8::10']")
+            if ($null -eq $v4node) { throw 'Export-DrawIO missing UserObject for IPv4 node' }
             if ($null -eq $v6node) { throw 'Export-DrawIO missing UserObject for IPv6 node' }
             $v6parent = $v6node.mxCell.parent
             if ([string]::IsNullOrWhiteSpace($v6parent) -or $v6parent -eq '1') {
               throw "IPv6 node was not parented into a subnet container (parent='$v6parent')"
             }
-            Write-Host "Export-DrawIO IPv6 OK: $v6Drawio (parent=$v6parent)"
+            Write-Host "Export-DrawIO dual-stack Import-Inventory OK: $dualDrawio (v6 parent=$v6parent)"
             # record candidate evidence
             $manifest = Import-PowerShellDataFile $stageModule
             Write-Host "Candidate commit: $env:GITHUB_SHA"

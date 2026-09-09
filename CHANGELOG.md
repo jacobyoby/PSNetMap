@@ -57,7 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `$false` / `$null` (indeterminate, e.g. local send failure). Optional
   `-TcpFallbackPort` can promote ICMP-silent hosts. DrawIO paints unknown gray.
 - **Packaged CI smoke** imports every `FunctionsToExport` entry, uses
-  `actions/checkout@v7`, and asserts offline dual-stack DrawIO parenting.
+  `actions/checkout@v7`, and asserts offline dual-stack DrawIO via
+  `Import-Inventory` (v4 + v6 inventory JSON, not a hand-built topology).
 
 ### Fixed
 - **`Invoke-SnmpWalk` accepts IPv6 `TargetIP`.** Validation was IPv4/FQDN-only,

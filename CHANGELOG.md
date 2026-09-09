@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`Import-Inventory` accepts dual-stack addresses.** Device `ip` and subnet
+  `cidr` values may be IPv4 or IPv6. Both families are normalized (canonical
+  string form; CIDR host bits cleared). Uniqueness is the normalized address
+  string. Each device still has a single identity address; prefer IPv4 when a
+  dual-stack host needs only one row. Discovery (`Invoke-NetworkDiscovery`)
+  remains IPv4-only.
+
 ### Fixed
 - **`Export-DrawIO` L2-FDB edge style.** Bridge forwarding-table edges (`Confidence='L2-FDB'`)
   were falling through to the gray dotted “unknown” default. They now use a dedicated

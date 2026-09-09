@@ -27,6 +27,13 @@
       "role": "workstation",
       "vendor": "HP",
       "os": "Windows 11"
+    },
+    {
+      "ip": "2001:db8::1",
+      "hostname": "my-v6-router",
+      "role": "router",
+      "vendor": "Cisco",
+      "os": "IOS 15.x"
     }
   ],
   "subnets": [
@@ -34,6 +41,11 @@
       "cidr": "192.168.1.0/24",
       "label": "Main Network",
       "vlan": 1
+    },
+    {
+      "cidr": "2001:db8::/32",
+      "label": "IPv6 Lab",
+      "vlan": 100
     }
   ]
 }

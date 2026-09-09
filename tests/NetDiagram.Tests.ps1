@@ -122,11 +122,54 @@ Describe 'Import-Inventory' {
         { Import-Inventory -Path $path } | Should -Throw '*knownDevices*0*ip*'
     }
 
-    It 'Rejects IPv6 explicitly' {
+    It 'Accepts an IPv6 device address and retains the normalized form' {
         $path = Join-Path $TestDrive 'ipv6.json'
-        '{"knownDevices":[{"ip":"2001:db8::1"}]}' | Set-Content -Path $path
+        '{"knownDevices":[{"ip":"2001:0DB8:0000:0000:0000:0000:0000:0001"}]}' | Set-Content -Path $path
 
-        { Import-Inventory -Path $path } | Should -Throw '*IPv6 is not supported*'
+        $topology = Import-Inventory -Path $path
+        $topology.Nodes | Should -HaveCount 1
+        $topology.Nodes[0].IP | Should -Be '2001:db8::1'
+    }
+
+    It 'Accepts a dual-stack inventory with both family CIDRs' {
+        $path = Join-Path $TestDrive 'dual-stack.json'
+        @{
+            knownDevices = @(
+                @{ ip = '192.168.1.1'; hostname = 'v4-gw'; role = 'router' }
+                @{ ip = '2001:db8::10'; hostname = 'v6-gw'; role = 'router' }
+            )
+            subnets = @(
+                @{ cidr = '192.168.1.42/24'; label = 'v4-net' }
+                @{ cidr = '2001:db8::1/32'; label = 'v6-net' }
+            )
+        } | ConvertTo-Json -Depth 10 | Set-Content -Path $path
+
+        $topology = Import-Inventory -Path $path
+        $topology.Nodes.IP | Should -Contain '192.168.1.1'
+        $topology.Nodes.IP | Should -Contain '2001:db8::10'
+        $topology.Subnets.CIDR | Should -Contain '192.168.1.0/24'
+        $topology.Subnets.CIDR | Should -Contain '2001:db8::/32'
+    }
+
+    It 'Rejects an invalid IPv6 address and identifies its entry' {
+        $path = Join-Path $TestDrive 'bad-ipv6.json'
+        '{"knownDevices":[{"ip":"2001:db8::zzzz"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*knownDevices*0*ip*'
+    }
+
+    It 'Rejects malformed mixed-family address junk' {
+        $path = Join-Path $TestDrive 'mixed-junk.json'
+        '{"knownDevices":[{"ip":"192.168.1.1:2001:db8::1"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*knownDevices*0*ip*'
+    }
+
+    It 'Rejects duplicate IPv6 addresses across compressed and expanded forms' {
+        $path = Join-Path $TestDrive 'duplicate-v6.json'
+        '{"knownDevices":[{"ip":"2001:db8::1"},{"ip":"2001:0db8:0000:0000:0000:0000:0000:0001"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*duplicate device address*'
     }
 
     It 'Rejects duplicate normalized device addresses' {
@@ -141,6 +184,21 @@ Describe 'Import-Inventory' {
         '{"knownDevices":[],"subnets":[{"cidr":"192.168.1.0/33"}]}' | Set-Content -Path $path
 
         { Import-Inventory -Path $path } | Should -Throw '*subnets*0*cidr*'
+    }
+
+    It 'Rejects an invalid IPv6 prefix and identifies its entry' {
+        $path = Join-Path $TestDrive 'bad-v6-prefix.json'
+        '{"knownDevices":[],"subnets":[{"cidr":"2001:db8::/129"}]}' | Set-Content -Path $path
+
+        { Import-Inventory -Path $path } | Should -Throw '*subnets*0*cidr*'
+    }
+
+    It 'Normalizes IPv6 CIDR host bits' {
+        $path = Join-Path $TestDrive 'v6-cidr-hostbits.json'
+        '{"knownDevices":[],"subnets":[{"cidr":"2001:db8:aaaa:bbbb:cccc:dddd:eeee:ffff/32"}]}' | Set-Content -Path $path
+
+        $topology = Import-Inventory -Path $path
+        $topology.Subnets[0].CIDR | Should -Be '2001:db8::/32'
     }
 
     It 'Normalizes subnet host bits and maps an unknown role to Access' {
@@ -1463,6 +1521,36 @@ Describe 'Export-DrawIO subnet container parenting' {
         $v4Container | Should -Not -BeNullOrEmpty
 
         # Verify v6 node is parented to v6 container and v4 node to v4 container
+        $v6Node = $xml.SelectSingleNode("//UserObject[@ip='2001:db8::10']")
+        $v4Node = $xml.SelectSingleNode("//UserObject[@ip='192.168.1.10']")
+        $v6Node.mxCell.parent | Should -Be $v6Container.id
+        $v4Node.mxCell.parent | Should -Be $v4Container.id
+    }
+
+    It 'Parents imported IPv6 nodes into matching IPv6 containers after Import-Inventory' {
+        $path = Join-Path $TestDrive 'import-v6-parent.json'
+        @{
+            knownDevices = @(
+                @{ ip = '2001:db8::10'; hostname = 'v6-node'; role = 'switch' }
+                @{ ip = '192.168.1.10'; hostname = 'v4-node'; role = 'switch' }
+            )
+            subnets = @(
+                @{ cidr = '2001:db8::/32'; label = 'v6-net'; vlan = 100 }
+                @{ cidr = '192.168.1.0/24'; label = 'v4-net'; vlan = 1 }
+            )
+        } | ConvertTo-Json -Depth 10 | Set-Content -Path $path
+
+        $topology = Import-Inventory -Path $path
+        $drawioPath = Join-Path $script:TestDataPath 'ipv6-import-containers.drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath
+
+        $xml = [xml](Get-Content -Path $drawioPath -Raw)
+        $containers = @($xml.SelectNodes("//mxCell[contains(@style,'swimlane')]"))
+        $v6Container = $containers | Where-Object { $_.value -match 'v6-net' }
+        $v4Container = $containers | Where-Object { $_.value -match 'v4-net' }
+        $v6Container | Should -Not -BeNullOrEmpty
+        $v4Container | Should -Not -BeNullOrEmpty
+
         $v6Node = $xml.SelectSingleNode("//UserObject[@ip='2001:db8::10']")
         $v4Node = $xml.SelectSingleNode("//UserObject[@ip='192.168.1.10']")
         $v6Node.mxCell.parent | Should -Be $v6Container.id

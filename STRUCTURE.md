@@ -29,6 +29,8 @@ NetDiagram-PS/
 ├── Private/                # Internal helpers, not exported
 │   ├── ConvertFrom-ArpText.ps1
 │   ├── ConvertFrom-UInt32Address.ps1
+│   ├── ConvertTo-NormalizedCidr.ps1
+│   ├── ConvertTo-NormalizedIPAddress.ps1
 │   ├── ConvertTo-NormalizedIPv4Address.ps1
 │   ├── ConvertTo-NormalizedIPv4Cidr.ps1
 │   ├── ConvertTo-UInt32Address.ps1

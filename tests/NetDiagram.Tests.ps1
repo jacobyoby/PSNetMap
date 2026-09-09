@@ -785,7 +785,7 @@ Describe 'SNMP credential-map precedence (#17 regression)' {
     }
 }
 
-Describe 'Get-SnmpNeighbors node eligibility (#1 regression)' {
+Describe 'Get-SnmpNeighbors node eligibility' {
     BeforeEach {
         # Empty credential map is valid; -TryPublic supplies the community so no
         # SecretManagement dependency is needed for the test.
@@ -900,7 +900,7 @@ Describe 'Get-SnmpNeighbors provisional parser confidence (#20 regression)' {
     }
 }
 
-Describe 'Invoke-SnmpWalk parameter validation (#6 regression)' {
+Describe 'Invoke-SnmpWalk parameter validation' {
     It 'Rejects an invalid SNMP version' {
         { Invoke-SnmpWalk -TargetIP '192.0.2.1' -Community 'public' -Version 'v9' } | Should -Throw
     }
@@ -926,7 +926,7 @@ Describe 'Invoke-SnmpWalk parameter validation (#6 regression)' {
     }
 }
 
-Describe 'Invoke-PortScan parameter validation (#7 regression)' {
+Describe 'Invoke-PortScan parameter validation' {
     It 'Rejects a port outside 1-65535' {
         { Invoke-PortScan -IPAddress '192.0.2.1' -Ports 70000 } | Should -Throw
     }
@@ -936,7 +936,7 @@ Describe 'Invoke-PortScan parameter validation (#7 regression)' {
     }
 }
 
-Describe 'Export-DrawIO duplicate-IP handling (#8 regression)' {
+Describe 'Export-DrawIO duplicate-IP handling' {
     It 'Emits unique mxCell ids and de-duplicates nodes sharing an IP' {
         $topology = [pscustomobject]@{
             Nodes = @(
@@ -1002,7 +1002,7 @@ Describe 'Export-DrawIO tooltip and reachability metadata (#10 regression)' {
     }
 }
 
-Describe 'Export-DrawIO subnet container parenting (#9 regression)' {
+Describe 'Export-DrawIO subnet container parenting' {
     It 'Parents nodes into the matching subnet container instead of the root' {
         # Test inventory nodes live in 192.168.1.0/24 and there is a matching subnet.
         $topology = Import-Inventory -Path $script:TestInventoryPath
@@ -1105,7 +1105,7 @@ Describe 'Export-DrawIO dynamic container layout (#19 regression)' {
     }
 }
 
-Describe 'Quick-start wizard CIDR math (#4 regression)' {
+Describe 'Quick-start wizard CIDR math' {
     BeforeAll {
         # Dot-source the example; the dot-source guard returns before the wizard body
         # runs, so only the pure CIDR helper functions get defined.
@@ -1176,7 +1176,7 @@ Describe 'Quick-start wizard CIDR math (#4 regression)' {
     }
 }
 
-Describe 'Quick-start wizard output paths (#9 regression)' {
+Describe 'Quick-start wizard output paths' {
     BeforeAll {
         $exampleScript = Join-Path $PSScriptRoot '..' 'examples' 'New-NetworkDiagram.ps1'
         . $exampleScript

@@ -34,6 +34,7 @@ NetDiagram-PS/
 │   ├── ConvertTo-NormalizedIPv4Address.ps1
 │   ├── ConvertTo-NormalizedIPv4Cidr.ps1
 │   ├── ConvertTo-UInt32Address.ps1
+│   ├── Get-IPv6CidrScanTarget.ps1
 │   ├── Get-LayerFromRole.ps1
 │   ├── Get-PrefixMask.ps1
 │   ├── Get-ServiceName.ps1

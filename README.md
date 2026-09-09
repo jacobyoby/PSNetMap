@@ -21,11 +21,12 @@ pwsh .\examples\New-NetworkDiagram.ps1
 ```
 
 The wizard performs the following actions:
-- Discovers the network configuration
-- Scans for active devices
+- Discovers the network configuration (IPv4 and IPv6 on the default-route interface)
+- Scans for active IPv4 devices (Quick/Medium/Full, /22 cap)
+- Adds IPv6 neighbors from the local ND/ARP table (does **not** sweep a /64)
 - Tests connectivity with `Test-DeviceReachability` (reachable / unreachable / unknown)
 - Generates a draw.io diagram
-- Saves an inventory file for later refinement
+- Saves an inventory file for later refinement (`Import-Inventory` accepts the v6 rows)
 
 ---
 
@@ -91,7 +92,21 @@ pwsh .\examples\New-NetworkDiagram.ps1 -DnsTimeoutSeconds 1
 
 # ICMP-silent gateway: fall back to a TCP connect on port 443
 pwsh .\examples\New-NetworkDiagram.ps1 -TcpFallbackPort 443
+
+# Optional: sweep a small IPv6 prefix (/120 or longer). A /64 is rejected.
+pwsh .\examples\New-NetworkDiagram.ps1 -Cidr 2001:db8::/120
 ```
+
+**Dual-stack discovery:** the wizard prefers the interface of the active default
+route (IPv4 default if present, otherwise IPv6). `-InterfaceName` still
+overrides. IPv4 scanning is unchanged (Quick / Medium / Full, capped at a /22).
+IPv6 is **not** enumerated from the interface prefix — a LAN `/64` is 2^64
+addresses. Instead, IPv6 hosts are taken from the local neighbor table
+(`Get-LocalARPTable`, ND/ARP). Pass `-Cidr` only for a small IPv6 prefix
+(`/120`–`/128`, at most 256 hosts). `Invoke-NetworkDiscovery -Cidr` accepts
+IPv6 the same way and throws an actionable error for oversized prefixes
+(pointing at `Get-LocalARPTable`) instead of hanging. The saved inventory stays
+importable with `Import-Inventory`.
 
 ### Method 2: Manual Workflow (manual inventory)
 
@@ -314,7 +329,7 @@ After importing the module, you have access to:
 | `Export-NodeInventoryCsv` | Export inventory CSV |
 | `Export-Metadata` | Save scan statistics |
 | `Import-NmapScan` | Import nmap XML (IPv4 preferred; IPv6-only hosts imported) |
-| `Invoke-NetworkDiscovery` | Scan a CIDR without repo clone |
+| `Invoke-NetworkDiscovery` | Scan an IPv4 CIDR, or a small IPv6 CIDR (/120+); larger v6 prefixes are rejected |
 | `Compare-NetworkScans` | Diff two topology snapshots |
 | `Invoke-SnmpWalk` | Direct SNMP queries |
 

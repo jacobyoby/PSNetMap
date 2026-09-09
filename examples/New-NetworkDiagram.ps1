@@ -8,14 +8,22 @@
     This script automatically discovers your network configuration and creates a professional network diagram.
     No configuration files needed - just run it!
 .PARAMETER ScanDepth
-    How deep to scan the detected subnet: Quick (up to 8 hosts sampled across the range),
+    How deep to scan a detected IPv4 subnet: Quick (up to 8 hosts sampled across the range),
     Medium (first 50 hosts), Full (all usable hosts, capped at a /22 = 1022 hosts for
     larger subnets). Host addresses are derived from the interface's real CIDR prefix.
+    IPv6 is not swept by ScanDepth; neighbors come from the local ND/ARP table unless
+    -Cidr names a small IPv6 prefix (/120 or longer).
 .PARAMETER OutputPath
     Where to save the diagram (default: .\my-network.drawio)
 .PARAMETER InterfaceName
     Interface name or numeric interface index to scan. By default, the interface
-    used by the active IPv4 default route is selected.
+    used by the active default route is selected (IPv4 default preferred, else IPv6).
+    Dual-stack addresses on that interface are included; this switch still overrides.
+.PARAMETER Cidr
+    Optional IPv4 or IPv6 CIDR override. IPv4 uses Quick/Medium/Full with the /22 cap.
+    IPv6 prefixes shorter than /120 (including a typical LAN /64) are rejected; use
+    neighbor discovery instead, or pass a /120–/128. When omitted, IPv6 hosts come
+    only from the local neighbor table (Get-LocalARPTable).
 .PARAMETER DnsTimeoutSeconds
     Maximum time for each reverse DNS lookup during discovery (default: 2 seconds).
 .PARAMETER TcpFallbackPort
@@ -33,6 +41,10 @@
     .\New-NetworkDiagram.ps1 -TcpFallbackPort 443
 
     Use TCP 443 as a fallback when ICMP is blocked
+.EXAMPLE
+    .\New-NetworkDiagram.ps1 -Cidr 2001:db8::/120
+
+    Sweep a small IPv6 prefix. Prefixes shorter than /120 (including /64) are rejected.
 #>
 
 [CmdletBinding()]
@@ -43,6 +55,8 @@ param(
     [string]$OutputPath = '.\my-network.drawio',
 
     [string]$InterfaceName,
+
+    [string]$Cidr,
 
     [ValidateRange(1, 30)]
     [int]$DnsTimeoutSeconds = 2,
@@ -154,6 +168,85 @@ function Get-InventoryOutputPath {
     return $inventoryPath
 }
 
+function Get-InterfaceAddressFamily {
+    param([Parameter(Mandatory)][object]$Interface)
+
+    if ($Interface.PSObject.Properties['AddressFamily'] -and -not [string]::IsNullOrWhiteSpace([string]$Interface.AddressFamily)) {
+        return [string]$Interface.AddressFamily
+    }
+
+    $parsed = $null
+    if ([System.Net.IPAddress]::TryParse([string]$Interface.IPAddress, [ref]$parsed)) {
+        if ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+            return 'IPv6'
+        }
+    }
+    return 'IPv4'
+}
+
+function Test-IsIPv6LinkLocal {
+    param([string]$IPAddress)
+
+    $parsed = $null
+    if (-not [System.Net.IPAddress]::TryParse($IPAddress, [ref]$parsed)) {
+        return $false
+    }
+    return [bool]$parsed.IsIPv6LinkLocal
+}
+
+function Test-SameScanInterface {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Candidates)
+
+    if ($Candidates.Count -le 1) {
+        return $true
+    }
+
+    $names = @($Candidates | ForEach-Object { $_.Name } | Select-Object -Unique)
+    if ($names.Count -eq 1) {
+        return $true
+    }
+
+    $indexes = @($Candidates | Where-Object { $null -ne $_.Index } | ForEach-Object { $_.Index } | Select-Object -Unique)
+    return ($indexes.Count -eq 1 -and $indexes[0] -ne $null -and $Candidates.Count -eq @($Candidates | Where-Object { $_.Index -eq $indexes[0] }).Count)
+}
+
+function Select-PreferredScanAddress {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Candidates)
+
+    if ($null -eq $Candidates -or $Candidates.Count -eq 0) {
+        return $null
+    }
+    if ($Candidates.Count -eq 1) {
+        return $Candidates[0]
+    }
+
+    $v4 = @($Candidates | Where-Object { (Get-InterfaceAddressFamily $_) -eq 'IPv4' })
+    if ($v4.Count -ge 1) {
+        return $v4[0]
+    }
+
+    $v6preferred = @($Candidates | Where-Object {
+        (Get-InterfaceAddressFamily $_) -eq 'IPv6' -and -not (Test-IsIPv6LinkLocal $_.IPAddress)
+    })
+    if ($v6preferred.Count -ge 1) {
+        return $v6preferred[0]
+    }
+
+    return $Candidates[0]
+}
+
+function Get-RelatedInterfaceAddress {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Interfaces,
+        [Parameter(Mandatory)][object]$Selected
+    )
+
+    return @($Interfaces | Where-Object {
+        $_.Name -eq $Selected.Name -or
+        ($null -ne $Selected.Index -and $null -ne $_.Index -and $_.Index -eq $Selected.Index)
+    })
+}
+
 function Select-ScanInterface {
     param(
         [Parameter(Mandatory)][object[]]$Interfaces,
@@ -163,7 +256,7 @@ function Select-ScanInterface {
     )
 
     if ($Interfaces.Count -eq 0) {
-        throw 'No active IPv4 network interfaces were found.'
+        throw 'No active IPv4 or IPv6 network interfaces were found.'
     }
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedInterface)) {
@@ -174,27 +267,184 @@ function Select-ScanInterface {
         if ($matchingInterfaces.Count -eq 0) {
             throw "Network interface '$RequestedInterface' was not found. Available interfaces: $($Interfaces.Name -join ', ')"
         }
-        if ($matchingInterfaces.Count -gt 1) {
+        if (-not (Test-SameScanInterface -Candidates $matchingInterfaces)) {
             throw "Network interface '$RequestedInterface' is ambiguous. Use its numeric interface index."
         }
-        return $matchingInterfaces[0]
+        return Select-PreferredScanAddress -Candidates $matchingInterfaces
     }
 
     $routeMatches = @($Interfaces | Where-Object {
         (-not [string]::IsNullOrWhiteSpace($DefaultInterfaceName) -and $_.Name -eq $DefaultInterfaceName) -or
         ($null -ne $DefaultInterfaceIndex -and $_.Index -eq $DefaultInterfaceIndex)
     })
-    if ($routeMatches.Count -eq 1) {
-        return $routeMatches[0]
+    if ($routeMatches.Count -ge 1) {
+        if (-not (Test-SameScanInterface -Candidates $routeMatches)) {
+            throw 'The default route maps to multiple interfaces. Select one with -InterfaceName.'
+        }
+        return Select-PreferredScanAddress -Candidates $routeMatches
     }
-    if ($routeMatches.Count -gt 1) {
-        throw 'The default route maps to multiple IPv4 addresses. Select one with -InterfaceName.'
-    }
-    if ($Interfaces.Count -eq 1) {
-        return $Interfaces[0]
+    if (Test-SameScanInterface -Candidates $Interfaces) {
+        return Select-PreferredScanAddress -Candidates $Interfaces
     }
 
-    throw 'No IPv4 default-route interface could be selected. Use -InterfaceName with an available interface name or index.'
+    throw 'No default-route interface could be selected. Use -InterfaceName with an available interface name or index.'
+}
+
+function Get-IPv6CidrSweepFailureMessage {
+    param(
+        [Parameter(Mandatory)][string]$Cidr,
+        [Parameter(Mandatory)][int]$PrefixLength,
+        [int]$MinPrefixLength = 120,
+        [int]$MaxScanHosts = 256
+    )
+
+    $hostBits = 128 - $PrefixLength
+    return "IPv6 CIDR '$Cidr' (/$PrefixLength) is too large to sweep (2^$hostBits addresses). Do not sweep a /64 or other large prefix. Use a CIDR of /$MinPrefixLength or longer (at most $MaxScanHosts hosts), or discover IPv6 hosts from the local neighbor table with Get-LocalARPTable (ND/ARP) instead of a CIDR sweep."
+}
+
+function ConvertFrom-WizardCidr {
+    param([Parameter(Mandatory)][string]$Cidr)
+
+    if ($Cidr -notmatch '^(.+)/(\d{1,3})$') {
+        throw "Invalid CIDR value '$Cidr': expected IPv4 or IPv6 CIDR notation."
+    }
+
+    $parsed = $null
+    if (-not [System.Net.IPAddress]::TryParse($matches[1], [ref]$parsed)) {
+        throw "Invalid CIDR value '$Cidr': expected an IPv4 or IPv6 address."
+    }
+
+    $prefixLength = [int]$matches[2]
+    $maxPrefix = if ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) { 32 } else { 128 }
+    if ($prefixLength -lt 0 -or $prefixLength -gt $maxPrefix) {
+        throw "Invalid CIDR value '$Cidr': prefix must be between 0 and $maxPrefix."
+    }
+
+    $family = if ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) { 'IPv6' } else { 'IPv4' }
+    if ($family -eq 'IPv6' -and $prefixLength -lt 120) {
+        throw (Get-IPv6CidrSweepFailureMessage -Cidr $Cidr -PrefixLength $prefixLength)
+    }
+
+    [pscustomobject]@{
+        Address       = $parsed.ToString()
+        PrefixLength  = $prefixLength
+        AddressFamily = $family
+        Cidr          = "$($parsed.ToString())/$prefixLength"
+    }
+}
+
+function Select-IPv6NeighborAddress {
+    param(
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$NeighborEntries = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$SkipIPs = @(),
+
+        [Parameter()]
+        [string]$InterfaceName
+    )
+
+    $skip = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($ip in @($SkipIPs)) {
+        if ([string]::IsNullOrWhiteSpace($ip)) { continue }
+        $parsedSkip = $null
+        if ([System.Net.IPAddress]::TryParse($ip, [ref]$parsedSkip)) {
+            [void]$skip.Add($parsedSkip.ToString())
+        }
+        else {
+            [void]$skip.Add($ip)
+        }
+    }
+
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($NeighborEntries)) {
+        if ($null -eq $entry -or [string]::IsNullOrWhiteSpace([string]$entry.IPAddress)) { continue }
+
+        $addr = $null
+        if (-not [System.Net.IPAddress]::TryParse([string]$entry.IPAddress, [ref]$addr)) { continue }
+        if ($addr.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetworkV6) { continue }
+        if ($addr.IsIPv6Multicast) { continue }
+        if ([System.Net.IPAddress]::IsLoopback($addr)) { continue }
+
+        $canonical = $addr.ToString()
+        if ($skip.Contains($canonical)) { continue }
+
+        if (-not [string]::IsNullOrWhiteSpace($InterfaceName) -and
+            $entry.PSObject.Properties['InterfaceAlias'] -and
+            -not [string]::IsNullOrWhiteSpace([string]$entry.InterfaceAlias) -and
+            $entry.InterfaceAlias -ne $InterfaceName) {
+            continue
+        }
+
+        $state = [string]$entry.State
+        if ($state -match '^(Incomplete|Failed|None|Unreachable)$') { continue }
+
+        if ($seen.Add($canonical)) {
+            $canonical
+        }
+    }
+}
+
+function ConvertTo-WizardNeighborNode {
+    param(
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$NeighborEntries = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$SkipIPs = @(),
+
+        [Parameter()]
+        [string]$InterfaceName
+    )
+
+    $ips = @(Select-IPv6NeighborAddress -NeighborEntries $NeighborEntries -SkipIPs $SkipIPs -InterfaceName $InterfaceName)
+    foreach ($ip in $ips) {
+        [pscustomobject]@{
+            IP        = $ip
+            Hostname  = $ip
+            Role      = 'unknown'
+            Vendor    = 'Unknown'
+            OS        = 'Unknown'
+            Layer     = 'Access'
+            Reachable = $null
+        }
+    }
+}
+
+function New-WizardInventoryObject {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Nodes,
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$Subnets = @()
+    )
+
+    return @{
+        knownDevices = @($Nodes | ForEach-Object {
+            @{
+                ip       = $_.IP
+                hostname = $_.Hostname
+                role     = $_.Role
+                vendor   = $_.Vendor
+                os       = $_.OS
+            }
+        })
+        subnets = @($Subnets | ForEach-Object {
+            @{
+                cidr  = $_.CIDR
+                label = $_.Label
+                vlan  = $_.VLAN
+            }
+        })
+    }
 }
 
 function Invoke-WizardReachabilityProbe {
@@ -397,6 +647,17 @@ function ConvertFrom-MacOSInterfaceText {
                 Index = $null
                 IPAddress = $matches[1]
                 PrefixLength = ($binaryMask.ToCharArray() | Where-Object { $_ -eq '1' }).Count
+                AddressFamily = 'IPv4'
+            }
+        }
+        elseif ($name -and $line -match '^\s+inet6\s+([0-9a-fA-F:]+)(?:%\S+)?\s+prefixlen\s+(\d+)') {
+            if ($matches[1] -eq '::1') { continue }
+            [pscustomobject]@{
+                Name = $name
+                Index = $null
+                IPAddress = $matches[1]
+                PrefixLength = [int]$matches[2]
+                AddressFamily = 'IPv6'
             }
         }
     }
@@ -420,6 +681,17 @@ function ConvertFrom-LinuxInterfaceText {
                 Index = $index
                 IPAddress = $matches[1]
                 PrefixLength = [int]$matches[2]
+                AddressFamily = 'IPv4'
+            }
+        }
+        elseif ($name -and $line -match '^\s+inet6\s+([0-9a-fA-F:]+)/(\d+)') {
+            if ($matches[1] -eq '::1') { continue }
+            [pscustomobject]@{
+                Name = $name
+                Index = $index
+                IPAddress = $matches[1]
+                PrefixLength = [int]$matches[2]
+                AddressFamily = 'IPv6'
             }
         }
     }
@@ -446,114 +718,174 @@ Write-Host "╚═════════════════════�
 # Step 1: Discover your network interfaces
 Write-Host "[1/5] Discovering your network configuration..." -ForegroundColor Yellow
 
-# Cross-platform network discovery
+# Cross-platform network discovery (IPv4 + IPv6)
+$gateway = $null
+$gatewayV6 = $null
+$dnsServers = @()
+$defaultInterfaceName = $null
+
 if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $IsWindows) {
     # Windows: Use native cmdlets
-    $interfaces = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
-        $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown'
+    $interfaces = @(Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object {
+        $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -ne '::1' -and
+        -not ($_.AddressFamily -eq 'IPv4' -and $_.PrefixOrigin -eq 'WellKnown')
     } | ForEach-Object {
+        $family = if ("$($_.AddressFamily)" -eq 'IPv6') { 'IPv6' } else { 'IPv4' }
         [pscustomobject]@{
             Name = $_.InterfaceAlias
             Index = $_.InterfaceIndex
             IPAddress = $_.IPAddress
             PrefixLength = $_.PrefixLength
+            AddressFamily = $family
         }
     })
-    
-    # Get gateway
-    $routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
-        Where-Object { $_.NextHop -ne '0.0.0.0' }
-    $defaultRoute = $routes | Sort-Object RouteMetric | Select-Object -First 1
+
+    $v4Routes = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Where-Object { $_.NextHop -ne '0.0.0.0' })
+    $v6Routes = @(Get-NetRoute -AddressFamily IPv6 -DestinationPrefix '::/0' -ErrorAction SilentlyContinue |
+        Where-Object { $_.NextHop -and $_.NextHop -ne '::' })
+    $defaultRoute = $v4Routes | Sort-Object RouteMetric | Select-Object -First 1
+    if (-not $defaultRoute) {
+        $defaultRoute = $v6Routes | Sort-Object RouteMetric | Select-Object -First 1
+    }
     $primaryInterface = Select-ScanInterface -Interfaces $interfaces -RequestedInterface $InterfaceName `
         -DefaultInterfaceIndex $defaultRoute.InterfaceIndex
-    $selectedRoute = $routes | Where-Object { $_.InterfaceIndex -eq $primaryInterface.Index } |
+    $selectedV4Route = $v4Routes | Where-Object { $_.InterfaceIndex -eq $primaryInterface.Index } |
         Sort-Object RouteMetric | Select-Object -First 1
-    $gateway = $selectedRoute.NextHop
-    
-    # Get DNS
-    $dnsServers = @(Get-DnsClientServerAddress -AddressFamily IPv4 -InterfaceIndex $primaryInterface.Index -ErrorAction SilentlyContinue |
+    $selectedV6Route = $v6Routes | Where-Object { $_.InterfaceIndex -eq $primaryInterface.Index } |
+        Sort-Object RouteMetric | Select-Object -First 1
+    $gateway = $selectedV4Route.NextHop
+    $gatewayV6 = $selectedV6Route.NextHop
+
+    $dnsServers = @(Get-DnsClientServerAddress -InterfaceIndex $primaryInterface.Index -ErrorAction SilentlyContinue |
         Where-Object { $_.ServerAddresses.Count -gt 0 } |
         Select-Object -ExpandProperty ServerAddresses -Unique |
-        Where-Object { $_ -notmatch '^(127\.|::1|fe80:)' } |
-        Select-Object -First 3)
+        Where-Object { $_ -notmatch '^(127\.|::1)' } |
+        Select-Object -First 4)
 } else {
     # macOS/Linux: Parse ifconfig/ip commands
     if ($IsMacOS) {
-        # Use ifconfig on macOS
         $ifconfigOutput = & ifconfig -a 2>&1
         $interfaces = @(ConvertFrom-MacOSInterfaceText -Lines $ifconfigOutput)
-        
-        # Get default gateway using route command
+
         $routeOutput = & route -n get default 2>&1
-        $gatewayMatch = [regex]::Match(($routeOutput -join "`n"), 'gateway:\s+(\d+\.\d+\.\d+\.\d+)')
-        $routeInterfaceMatch = [regex]::Match(($routeOutput -join "`n"), 'interface:\s+(\S+)')
+        $v4RouteText = $routeOutput -join "`n"
+        $gatewayMatch = [regex]::Match($v4RouteText, 'gateway:\s+(\d+\.\d+\.\d+\.\d+)')
+        $routeInterfaceMatch = [regex]::Match($v4RouteText, 'interface:\s+(\S+)')
         if ($gatewayMatch.Success) {
             $gateway = $gatewayMatch.Groups[1].Value
-        } else {
-            $gateway = $null
         }
         $defaultInterfaceName = if ($routeInterfaceMatch.Success) { $routeInterfaceMatch.Groups[1].Value } else { $null }
+
+        $v6RouteOutput = & route -n get -inet6 default 2>&1
+        $v6RouteText = $v6RouteOutput -join "`n"
+        $v6GatewayMatch = [regex]::Match($v6RouteText, 'gateway:\s+(\S+)')
+        $v6InterfaceMatch = [regex]::Match($v6RouteText, 'interface:\s+(\S+)')
+        if ($v6GatewayMatch.Success) {
+            $gatewayV6 = ($v6GatewayMatch.Groups[1].Value -replace '%.*$', '')
+        }
+        if (-not $defaultInterfaceName -and $v6InterfaceMatch.Success) {
+            $defaultInterfaceName = $v6InterfaceMatch.Groups[1].Value
+        }
+
         $primaryInterface = Select-ScanInterface -Interfaces $interfaces -RequestedInterface $InterfaceName `
             -DefaultInterfaceName $defaultInterfaceName
         if ($InterfaceName -and $primaryInterface.Name -ne $defaultInterfaceName) {
             $gateway = $null
-        }
-        
-        # Get DNS servers from /etc/resolv.conf or scutil
-        $dnsOutput = & scutil --dns 2>&1
-        $dnsText = $dnsOutput -join "`n"
-        $dnsMatches = [regex]::Matches($dnsText, 'nameserver\[\d+\]\s*:\s*(\d+\.\d+\.\d+\.\d+)')
-        $dnsServers = @($dnsMatches | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique -First 3)
-        
-        if ($dnsServers.Count -eq 0) {
-            # Fallback to /etc/resolv.conf
-            if (Test-Path '/etc/resolv.conf') {
-                $resolvConf = Get-Content '/etc/resolv.conf' -ErrorAction SilentlyContinue
-                $dnsServers = @($resolvConf | Where-Object { $_ -match '^nameserver\s+(\d+\.\d+\.\d+\.\d+)' } | 
-                    ForEach-Object { $matches[1] } | Select-Object -Unique -First 3)
+            if (-not $v6InterfaceMatch.Success -or $primaryInterface.Name -ne $v6InterfaceMatch.Groups[1].Value) {
+                $gatewayV6 = $null
             }
         }
+
+        $dnsOutput = & scutil --dns 2>&1
+        $dnsText = $dnsOutput -join "`n"
+        $dnsMatches = [regex]::Matches($dnsText, 'nameserver\[\d+\]\s*:\s*(\S+)')
+        $dnsServers = @($dnsMatches | ForEach-Object { $_.Groups[1].Value } |
+            Where-Object { $_ -notmatch '^(127\.|::1)' } |
+            Select-Object -Unique -First 4)
+
+        if ($dnsServers.Count -eq 0 -and (Test-Path '/etc/resolv.conf')) {
+            $resolvConf = Get-Content '/etc/resolv.conf' -ErrorAction SilentlyContinue
+            $dnsServers = @($resolvConf | Where-Object { $_ -match '^nameserver\s+(\S+)' } |
+                ForEach-Object { $matches[1] } |
+                Where-Object { $_ -notmatch '^(127\.|::1)' } |
+                Select-Object -Unique -First 4)
+        }
     } elseif ($IsLinux) {
-        # Use ip command on Linux
-        $ipOutput = & ip -4 addr show 2>&1
+        $ipOutput = & ip addr show 2>&1
         $interfaces = @(ConvertFrom-LinuxInterfaceText -Lines $ipOutput)
-        
-        # Get default gateway
+
         $routeOutput = & ip route show default 2>&1
-        $gatewayMatch = [regex]::Match(($routeOutput -join "`n"), 'default\s+via\s+(\d+\.\d+\.\d+\.\d+)')
-        $routeInterfaceMatch = [regex]::Match(($routeOutput -join "`n"), '\bdev\s+(\S+)')
+        $v4RouteText = $routeOutput -join "`n"
+        $gatewayMatch = [regex]::Match($v4RouteText, 'default\s+via\s+(\d+\.\d+\.\d+\.\d+)')
+        $routeInterfaceMatch = [regex]::Match($v4RouteText, '\bdev\s+(\S+)')
         if ($gatewayMatch.Success) {
             $gateway = $gatewayMatch.Groups[1].Value
-        } else {
-            $gateway = $null
         }
         $defaultInterfaceName = if ($routeInterfaceMatch.Success) { $routeInterfaceMatch.Groups[1].Value } else { $null }
+
+        $v6RouteOutput = & ip -6 route show default 2>&1
+        $v6RouteText = $v6RouteOutput -join "`n"
+        $v6GatewayMatch = [regex]::Match($v6RouteText, 'default\s+via\s+([0-9a-fA-F:]+)')
+        $v6InterfaceMatch = [regex]::Match($v6RouteText, '\bdev\s+(\S+)')
+        if ($v6GatewayMatch.Success) {
+            $gatewayV6 = $v6GatewayMatch.Groups[1].Value
+        }
+        if (-not $defaultInterfaceName -and $v6InterfaceMatch.Success) {
+            $defaultInterfaceName = $v6InterfaceMatch.Groups[1].Value
+        }
+
         $primaryInterface = Select-ScanInterface -Interfaces $interfaces -RequestedInterface $InterfaceName `
             -DefaultInterfaceName $defaultInterfaceName
         if ($InterfaceName -and $primaryInterface.Name -ne $defaultInterfaceName) {
             $gateway = $null
+            if (-not $v6InterfaceMatch.Success -or $primaryInterface.Name -ne $v6InterfaceMatch.Groups[1].Value) {
+                $gatewayV6 = $null
+            }
         }
-        
-        # Get DNS servers from /etc/resolv.conf
+
         $dnsServers = @()
         if (Test-Path '/etc/resolv.conf') {
             $resolvConf = Get-Content '/etc/resolv.conf' -ErrorAction SilentlyContinue
-            $dnsServers = @($resolvConf | Where-Object { $_ -match '^nameserver\s+(\d+\.\d+\.\d+\.\d+)' } | 
-                ForEach-Object { $matches[1] } | Select-Object -Unique -First 3)
+            $dnsServers = @($resolvConf | Where-Object { $_ -match '^nameserver\s+(\S+)' } |
+                ForEach-Object { $matches[1] } |
+                Where-Object { $_ -notmatch '^(127\.|::1)' } |
+                Select-Object -Unique -First 4)
         }
     }
-    
+}
+
+$selectedAddresses = @(Get-RelatedInterfaceAddress -Interfaces $interfaces -Selected $primaryInterface)
+$v4Addresses = @($selectedAddresses | Where-Object { (Get-InterfaceAddressFamily $_) -eq 'IPv4' })
+$v6Addresses = @($selectedAddresses | Where-Object { (Get-InterfaceAddressFamily $_) -eq 'IPv6' })
+$primaryV4 = if ($v4Addresses.Count -gt 0) { $v4Addresses[0] } else { $null }
+$primaryV6 = @(
+    $v6Addresses | Where-Object { -not (Test-IsIPv6LinkLocal $_.IPAddress) } |
+        Select-Object -First 1
+)
+if (-not $primaryV6 -and $v6Addresses.Count -gt 0) {
+    $primaryV6 = $v6Addresses[0]
 }
 
 $myIP = $primaryInterface.IPAddress
 $prefix = $primaryInterface.PrefixLength
+$myIPv6 = if ($primaryV6) { $primaryV6.IPAddress } else { $null }
 
-Write-Host "      Found $($interfaces.Count) active network interface(s)" -ForegroundColor Green
+Write-Host "      Found $($interfaces.Count) active address(es) on $($selectedAddresses.Count) selected-interface row(s)" -ForegroundColor Green
 
 Write-Host "      Interface: $($primaryInterface.Name)" -ForegroundColor Cyan
 Write-Host "      Your IP: $myIP/$prefix" -ForegroundColor Cyan
+if ($primaryV4 -and $primaryV6 -and $myIPv6 -ne $myIP) {
+    Write-Host "      IPv6: $myIPv6/$($primaryV6.PrefixLength)" -ForegroundColor Cyan
+}
 Write-Host "      Gateway: $gateway" -ForegroundColor Cyan
+if ($gatewayV6) {
+    Write-Host "      IPv6 gateway: $gatewayV6" -ForegroundColor Cyan
+}
 Write-Host "      DNS: $($dnsServers -join ', ')" -ForegroundColor Cyan
+if ($v6Addresses.Count -gt 0) {
+    Write-Host "      IPv6 scan: neighbor table (ND/ARP); CIDR sweep only for /120 or longer" -ForegroundColor DarkGray
+}
 
 # Step 2: Build initial topology
 Write-Host "`n[2/5] Building network topology..." -ForegroundColor Yellow
@@ -562,24 +894,67 @@ $nodes = @()
 $edges = @()
 $subnets = @()
 
-# Calculate subnet from the actual IP + prefix (real CIDR math, not a /24 assumption)
-$prefixInt = [int]$prefix
-if ($prefixInt -lt 0 -or $prefixInt -gt 32) {
-    Write-Host "      Prefix /$prefixInt is invalid; defaulting to /24" -ForegroundColor Yellow
-    $prefixInt = 24
+$cidrOverride = $null
+if (-not [string]::IsNullOrWhiteSpace($Cidr)) {
+    $cidrOverride = ConvertFrom-WizardCidr -Cidr $Cidr
 }
 
-$ipValue        = ConvertTo-UInt32Address $myIP
-$mask           = Get-PrefixMask -PrefixLength $prefixInt
-$networkValue   = $ipValue -band $mask
-$broadcastValue = [uint32](($networkValue -bor ((-bnot $mask) -band [uint32]4294967295)))
-$networkAddress = ConvertFrom-UInt32Address $networkValue
-$cidr           = "$networkAddress/$prefixInt"
+# IPv4 subnet from the interface (or -Cidr override). IPv6 interface prefixes are
+# recorded for inventory parenting but never swept unless -Cidr is a /120 or longer.
+$cidr = $null
+$networkValue = $null
+$broadcastValue = $null
+$prefixInt = $null
 
-$subnets += [pscustomobject]@{
-    CIDR = $cidr
-    Label = "Local Network"
-    VLAN = $null
+if ($cidrOverride -and $cidrOverride.AddressFamily -eq 'IPv4') {
+    $prefixInt = [int]$cidrOverride.PrefixLength
+    $ipValue = ConvertTo-UInt32Address $cidrOverride.Address
+    $mask = Get-PrefixMask -PrefixLength $prefixInt
+    $networkValue = $ipValue -band $mask
+    $broadcastValue = [uint32](($networkValue -bor ((-bnot $mask) -band [uint32]4294967295)))
+    $networkAddress = ConvertFrom-UInt32Address $networkValue
+    $cidr = "$networkAddress/$prefixInt"
+}
+elseif ($primaryV4) {
+    $prefixInt = [int]$primaryV4.PrefixLength
+    if ($prefixInt -lt 0 -or $prefixInt -gt 32) {
+        Write-Host "      Prefix /$prefixInt is invalid; defaulting to /24" -ForegroundColor Yellow
+        $prefixInt = 24
+    }
+
+    $ipValue        = ConvertTo-UInt32Address $primaryV4.IPAddress
+    $mask           = Get-PrefixMask -PrefixLength $prefixInt
+    $networkValue   = $ipValue -band $mask
+    $broadcastValue = [uint32](($networkValue -bor ((-bnot $mask) -band [uint32]4294967295)))
+    $networkAddress = ConvertFrom-UInt32Address $networkValue
+    $cidr           = "$networkAddress/$prefixInt"
+}
+
+if ($cidr) {
+    $subnets += [pscustomobject]@{
+        CIDR = $cidr
+        Label = "Local Network"
+        VLAN = $null
+    }
+}
+
+if ($primaryV6 -and -not (Test-IsIPv6LinkLocal $primaryV6.IPAddress)) {
+    $subnets += [pscustomobject]@{
+        CIDR = "$($primaryV6.IPAddress)/$($primaryV6.PrefixLength)"
+        Label = "IPv6 Local Network"
+        VLAN = $null
+    }
+}
+
+if ($cidrOverride -and $cidrOverride.AddressFamily -eq 'IPv6') {
+    $already = @($subnets | Where-Object { $_.CIDR -eq $cidrOverride.Cidr })
+    if ($already.Count -eq 0) {
+        $subnets += [pscustomobject]@{
+            CIDR = $cidrOverride.Cidr
+            Label = "IPv6 Scan"
+            VLAN = $null
+        }
+    }
 }
 
 # Add your computer - cross-platform
@@ -617,6 +992,18 @@ $nodes += [pscustomobject]@{
     Reachable = $true
 }
 
+if ($myIPv6 -and $myIPv6 -ne $myIP -and -not (Test-IsIPv6LinkLocal $myIPv6)) {
+    $nodes += [pscustomobject]@{
+        IP = $myIPv6
+        Hostname = $computerName
+        Role = 'workstation'
+        Vendor = 'Local'
+        OS = $osCaption
+        Layer = 'Access'
+        Reachable = $true
+    }
+}
+
 # Add gateway
 if ($gateway) {
     $gwHostname = try {
@@ -640,6 +1027,34 @@ if ($gateway) {
         SourceIP = $myIP
         TargetIP = $gateway
         Label = 'Default Route'
+        Source = 'Local Config'
+        Confidence = 'L3-Inferred'
+    }
+}
+
+if ($gatewayV6 -and $gatewayV6 -ne $gateway) {
+    $gw6Hostname = try {
+        $resolved = [System.Net.Dns]::GetHostEntry($gatewayV6)
+        $resolved.HostName
+    } catch {
+        "Gateway"
+    }
+
+    $nodes += [pscustomobject]@{
+        IP = $gatewayV6
+        Hostname = $gw6Hostname
+        Role = 'router'
+        Vendor = 'Unknown'
+        OS = 'Unknown'
+        Layer = 'Core'
+        Reachable = $null
+    }
+
+    $v6EdgeSource = if ($myIPv6) { $myIPv6 } else { $myIP }
+    $edges += [pscustomobject]@{
+        SourceIP = $v6EdgeSource
+        TargetIP = $gatewayV6
+        Label = 'IPv6 Default Route'
         Source = 'Local Config'
         Confidence = 'L3-Inferred'
     }
@@ -682,30 +1097,60 @@ Write-Host "      Created base topology with $($nodes.Count) nodes" -ForegroundC
 # Step 3: Scan for additional devices
 Write-Host "`n[3/5] Scanning for other devices on your network..." -ForegroundColor Yellow
 
-# Enumerate real host addresses from the actual prefix. Usable hosts are between the
-# network and broadcast addresses (for /31 and /32 there is no usable-host range).
-$maxScanHosts = 1022  # a /22 worth of hosts - the scan cap for large subnets
-[int64]$usableCount = [int64]$broadcastValue - [int64]$networkValue - 1
-if ($usableCount -lt 0) { $usableCount = 0 }
+$scanTargets = @()
 
-if ($usableCount -le 0) {
-    Write-Host "      Subnet $cidr has no scannable host range (point-to-point or /32)" -ForegroundColor Yellow
+# IPv4: enumerate real host addresses from the actual prefix. Usable hosts are
+# between the network and broadcast addresses (/31 and /32 have no sweep range).
+if ($null -ne $networkValue -and $null -ne $broadcastValue) {
+    $maxScanHosts = 1022  # a /22 worth of hosts - the scan cap for large subnets
+    [int64]$usableCount = [int64]$broadcastValue - [int64]$networkValue - 1
+    if ($usableCount -lt 0) { $usableCount = 0 }
+
+    if ($usableCount -le 0) {
+        Write-Host "      Subnet $cidr has no scannable host range (point-to-point or /32)" -ForegroundColor Yellow
+    }
+    elseif ($ScanDepth -eq 'Full' -and $usableCount -gt $maxScanHosts) {
+        Write-Host "      ⚠ Subnet /$prefixInt has $usableCount usable hosts; capping scan to the first $maxScanHosts (a /22)." -ForegroundColor Yellow
+        Write-Host "        Use a smaller subnet or an inventory file for a full sweep." -ForegroundColor Yellow
+    }
+
+    $hostValues = Get-SubnetScanTarget -NetworkValue $networkValue -BroadcastValue $broadcastValue -ScanDepth $ScanDepth -MaxScanHosts $maxScanHosts
+    $scanTargets += @($hostValues | ForEach-Object { ConvertFrom-UInt32Address $_ })
+    Write-Host "      IPv4 scan depth: $ScanDepth ($($scanTargets.Count) addresses in $cidr)" -ForegroundColor Cyan
 }
-elseif ($ScanDepth -eq 'Full' -and $usableCount -gt $maxScanHosts) {
-    Write-Host "      ⚠ Subnet /$prefixInt has $usableCount usable hosts; capping scan to the first $maxScanHosts (a /22)." -ForegroundColor Yellow
-    Write-Host "        Use a smaller subnet or an inventory file for a full sweep." -ForegroundColor Yellow
+
+# IPv6: never sweep the interface /64. Optional -Cidr of /120 or longer is enumerated
+# via Invoke-NetworkDiscovery (same cap as the module cmdlet).
+if ($cidrOverride -and $cidrOverride.AddressFamily -eq 'IPv6') {
+    $v6Sweep = Invoke-NetworkDiscovery -Cidr $cidrOverride.Cidr -ScanDepth $ScanDepth
+    $scanTargets += @($v6Sweep.Nodes | ForEach-Object { $_.IP })
+    Write-Host "      IPv6 CIDR scan: $ScanDepth ($($v6Sweep.Nodes.Count) addresses in $($cidrOverride.Cidr))" -ForegroundColor Cyan
 }
 
-$hostValues = Get-SubnetScanTarget -NetworkValue $networkValue -BroadcastValue $broadcastValue -ScanDepth $ScanDepth -MaxScanHosts $maxScanHosts
+$skipIPs = @($myIP, $myIPv6, $gateway, $gatewayV6) + @($dnsServers)
 
-# Materialize scan targets as IP strings before the parallel block (the CIDR helper
-# functions are not available inside ForEach-Object -Parallel runspaces).
-$scanTargets = @($hostValues | ForEach-Object { ConvertFrom-UInt32Address $_ })
+# Neighbor discovery (ND/ARP) for IPv6 — used instead of a /64 sweep.
+$neighborEntries = @()
+try {
+    $arpParams = @{}
+    if ($primaryInterface.Name) {
+        $arpParams.InterfaceAlias = $primaryInterface.Name
+    }
+    $neighborEntries = @(Get-LocalARPTable @arpParams)
+}
+catch {
+    Write-Host "      IPv6 neighbor table unavailable: $($_.Exception.Message)" -ForegroundColor DarkGray
+}
 
-Write-Host "      Scan depth: $ScanDepth ($($scanTargets.Count) addresses in $cidr)" -ForegroundColor Cyan
-Write-Host "      This may take 10-60 seconds..." -ForegroundColor Gray
+$neighborNodes = @(ConvertTo-WizardNeighborNode -NeighborEntries $neighborEntries -SkipIPs $skipIPs -InterfaceName $primaryInterface.Name)
+if ($neighborNodes.Count -gt 0) {
+    Write-Host "      IPv6 neighbors from local ND/ARP table: $($neighborNodes.Count)" -ForegroundColor Cyan
+}
 
-$skipIPs = @($myIP, $gateway) + @($dnsServers)
+if ($scanTargets.Count -gt 0) {
+    Write-Host "      This may take 10-60 seconds..." -ForegroundColor Gray
+}
+
 $discoverParams = @{
     ScanTargets    = $scanTargets
     SkipIPs        = $skipIPs
@@ -764,9 +1209,15 @@ if ($discoveredDevices.Count -gt 0) {
             Reachable = $true
         }
 
-        if ($gateway) {
+        $deviceFamily = $null
+        $parsedDevice = $null
+        if ([System.Net.IPAddress]::TryParse($device.IP, [ref]$parsedDevice)) {
+            $deviceFamily = if ($parsedDevice.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) { 'IPv6' } else { 'IPv4' }
+        }
+        $lanGateway = if ($deviceFamily -eq 'IPv6' -and $gatewayV6) { $gatewayV6 } else { $gateway }
+        if ($lanGateway) {
             $edges += [pscustomobject]@{
-                SourceIP = $gateway
+                SourceIP = $lanGateway
                 TargetIP = $device.IP
                 Label = 'LAN'
                 Source = 'Discovery'
@@ -774,8 +1225,41 @@ if ($discoveredDevices.Count -gt 0) {
             }
         }
     }
-} else {
-    Write-Host "      No additional devices found (ICMP may be blocked)" -ForegroundColor Yellow
+}
+
+$knownIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($existing in $nodes) {
+    $parsedExisting = $null
+    if ([System.Net.IPAddress]::TryParse([string]$existing.IP, [ref]$parsedExisting)) {
+        [void]$knownIPs.Add($parsedExisting.ToString())
+    }
+    else {
+        [void]$knownIPs.Add([string]$existing.IP)
+    }
+}
+
+$addedNeighbors = 0
+foreach ($neighbor in $neighborNodes) {
+    if (-not $knownIPs.Add($neighbor.IP)) { continue }
+    $addedNeighbors++
+    Write-Host "        • $($neighbor.IP) (ND/ARP)" -ForegroundColor DarkGray
+    $nodes += $neighbor
+    $lanGateway = if ($gatewayV6) { $gatewayV6 } elseif ($gateway) { $gateway } else { $null }
+    if ($lanGateway) {
+        $edges += [pscustomobject]@{
+            SourceIP = $lanGateway
+            TargetIP = $neighbor.IP
+            Label = 'ND'
+            Source = 'Discovery'
+            Confidence = 'L3-Inferred'
+        }
+    }
+}
+
+if ($discoveredDevices.Count -eq 0 -and $addedNeighbors -eq 0) {
+    Write-Host "      No additional devices found (ICMP may be blocked; IPv6 uses ND/ARP, not a /64 sweep)" -ForegroundColor Yellow
+} elseif ($addedNeighbors -gt 0) {
+    Write-Host "      ✓ Added $addedNeighbors IPv6 neighbor(s) from the local ND/ARP table" -ForegroundColor Green
 }
 
 # Step 4: Test reachability (tri-state: true / false / $null)
@@ -812,25 +1296,8 @@ if (Test-Path $OutputPath) {
 }
 
 # Save inventory for future use. Every accepted diagram extension produces a
-# distinct sibling inventory file.
-$inventoryData = @{
-    knownDevices = @($nodes | ForEach-Object {
-        @{
-            ip = $_.IP
-            hostname = $_.Hostname
-            role = $_.Role
-            vendor = $_.Vendor
-            os = $_.OS
-        }
-    })
-    subnets = @($subnets | ForEach-Object {
-        @{
-            cidr = $_.CIDR
-            label = $_.Label
-            vlan = $_.VLAN
-        }
-    })
-}
+# distinct sibling inventory file (Import-Inventory dual-stack contract).
+$inventoryData = New-WizardInventoryObject -Nodes $nodes -Subnets $subnets
 
 $inventoryData | ConvertTo-Json -Depth 10 | Out-File -FilePath $inventoryPath -Encoding utf8 -Force
 Write-Host "      ✓ Saved inventory: $inventoryPath" -ForegroundColor Green
@@ -842,7 +1309,16 @@ Write-Host "╚═════════════════════�
 
 Write-Host "`nYour Network:" -ForegroundColor Cyan
 Write-Host "  • Computer: $computerName ($myIP)" -ForegroundColor White
-Write-Host "  • Subnet: $cidr" -ForegroundColor White
+if ($myIPv6 -and $myIPv6 -ne $myIP) {
+    Write-Host "  • IPv6: $myIPv6" -ForegroundColor White
+}
+if ($cidr) {
+    Write-Host "  • Subnet: $cidr" -ForegroundColor White
+}
+$v6SubnetLabels = @($subnets | Where-Object { $_.CIDR -match ':' } | ForEach-Object { $_.CIDR })
+if ($v6SubnetLabels.Count -gt 0) {
+    Write-Host "  • IPv6 subnet(s): $($v6SubnetLabels -join ', ') (not swept; ND/ARP + optional /120+ -Cidr)" -ForegroundColor White
+}
 Write-Host "  • Total Devices: $($nodes.Count)" -ForegroundColor White
 Write-Host "  • Connections: $($topology.Edges.Count)" -ForegroundColor White
 

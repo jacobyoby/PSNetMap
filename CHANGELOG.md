@@ -11,14 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-function module split.** `NetDiagram-PS.psm1` is a loader that
   dot-sources `Private/` then `Public/` (one function per file). See
   [STRUCTURE.md](STRUCTURE.md).
-- **`Invoke-NetworkDiscovery`.** Enumerate an IPv4 CIDR (Quick/Medium/Full,
-  /22 cap) and return a topology after `Install-Module` without a repo clone.
+- **`Invoke-NetworkDiscovery`.** Enumerate a CIDR (IPv4 Quick/Medium/Full with
+  a /22 cap; IPv6 only /120 or longer) and return a topology after
+  `Install-Module` without a repo clone.
 - **`Import-NmapScan`.** Ingest nmap `-oX` XML; up hosts become nodes.
 - **`Import-NmapScan` imports IPv6 hosts.** nmap `-oX` `address` elements with
   `addrtype='ipv6'` are accepted when a host has no IPv4 address. Dual-stack
   hosts keep a single node identity: IPv4 is preferred when both families are
   present. Addresses are parsed with `[System.Net.IPAddress]::Parse` and stored
   in canonical form; malformed addresses are skipped (same as invalid IPv4).
+- **Wizard and `Invoke-NetworkDiscovery` dual-stack scan.** Interface selection
+  prefers the active default-route interface (IPv4 default, else IPv6);
+  `-InterfaceName` still overrides. IPv4 keeps Quick/Medium/Full with the /22
+  cap. IPv6 is never swept as a /64: hosts come from the local neighbor table
+  (`Get-LocalARPTable` / ND) plus optional `-Cidr` for prefixes of /120 or
+  longer (at most 256 hosts). Oversized IPv6 `-Cidr` values fail immediately
+  with an error pointing at neighbor discovery.
 - **`Export-Mermaid`.** Flowchart LR with subnet subgraphs; L2 solid,
   L3-Inferred dotted.
 - **`Export-NetBox`.** Devices CSV for NetBox bulk import (`-Site`,
@@ -40,8 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cidr` values may be IPv4 or IPv6. Both families are normalized (canonical
   string form; CIDR host bits cleared). Uniqueness is the normalized address
   string. Each device still has a single identity address; prefer IPv4 when a
-  dual-stack host needs only one row. Discovery (`Invoke-NetworkDiscovery`)
-  remains IPv4-only.
+  dual-stack host needs only one row. The wizard inventory write-out stays on
+  that contract.
 - **Reachability is tri-state.** `Test-DeviceReachability` records `$true` /
   `$false` / `$null` (indeterminate, e.g. local send failure). Optional
   `-TcpFallbackPort` can promote ICMP-silent hosts. DrawIO paints unknown gray.

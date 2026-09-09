@@ -29,6 +29,8 @@
         # Export and Analysis
         'Export-DrawIO'
         'Export-Metadata'
+        'Export-Topology'
+        'Import-Topology'
         'Compare-NetworkScans'
     )
 

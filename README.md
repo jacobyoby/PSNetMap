@@ -326,12 +326,12 @@ Import-Inventory my-servers.json | Export-DrawIO -OutFile servers.drawio
 ```powershell
 # Save baseline
 $baseline = Import-Inventory old-network.json
-$baseline | ConvertTo-Json | Out-File baseline-topo.json
+$baseline | Export-Topology -OutFile baseline-topo.json
 $baseline | Export-Metadata -OutFile baseline-meta.json
 
 # Save current state
 $current = Import-Inventory current-network.json
-$current | ConvertTo-Json | Out-File current-topo.json
+$current | Export-Topology -OutFile current-topo.json
 $current | Export-Metadata -OutFile current-meta.json
 
 # Compare

@@ -55,6 +55,8 @@ Describe 'Module Import' {
         $commandNames | Should -Contain 'Merge-Edges'
         $commandNames | Should -Contain 'Export-DrawIO'
         $commandNames | Should -Contain 'Export-Metadata'
+        $commandNames | Should -Contain 'Export-Topology'
+        $commandNames | Should -Contain 'Import-Topology'
         $commandNames | Should -Contain 'Compare-NetworkScans'
     }
 }
@@ -414,6 +416,57 @@ Describe 'Round-trip Test' {
         $xml = [xml]$content
         $xml.mxfile | Should -Not -BeNullOrEmpty
         $xml.mxfile.diagram | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Topology persistence (#34 regression)' {
+    It 'Round-trips a topology with nodes, subnets and merged edges' {
+        $topo = Import-Inventory -Path $script:TestInventoryPath
+        $topo.Edges = Merge-Edges -Edges @(
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = 'uplink'; Source = 'Manual'; Confidence = 'L3-Inferred' }
+            [pscustomobject]@{ SourceIP = '192.168.1.1'; TargetIP = '192.168.1.10'; Label = ''; Source = 'SNMP'; Confidence = 'L2-SNMP-Heuristic' }
+        )
+        $path = Join-Path $script:TestDataPath 'topo-roundtrip.json'
+        $topo | Export-Topology -OutFile $path -Force
+        $reloaded = Import-Topology -Path $path
+        $reloaded.Nodes.Count | Should -Be $topo.Nodes.Count
+        $reloaded.Edges.Count | Should -Be $topo.Edges.Count
+        $reloaded.Subnets.Count | Should -Be $topo.Subnets.Count
+        foreach ($n in $topo.Nodes) {
+            $m = $reloaded.Nodes | Where-Object { $_.IP -eq $n.IP }
+            $m | Should -Not -BeNullOrEmpty
+            $m.Hostname | Should -Be $n.Hostname
+            $m.Reachable | Should -Be $n.Reachable
+            $m.Layer | Should -Be $n.Layer
+        }
+    }
+
+    It 'Preserves edges nested three levels deep' {
+        $topo = [pscustomobject]@{
+            Nodes = @([pscustomobject]@{ IP = '10.0.0.1'; Hostname = 'a'; Role = 'switch'; Vendor = 'X'; OS = 'X'; Layer = 'Access'; Reachable = $true })
+            Edges = @([pscustomobject]@{ SourceIP = '10.0.0.1'; TargetIP = '10.0.0.2'; Label = 'x'; Source = 'Manual'; Confidence = 'L3-Inferred'; Details = [pscustomobject]@{ Level1 = [pscustomobject]@{ Level2 = [pscustomobject]@{ Level3 = 'deep-value' } } } })
+            Subnets = @()
+        }
+        $path = Join-Path $script:TestDataPath 'topo-deep.json'
+        $topo | Export-Topology -OutFile $path -Force
+        $reloaded = Import-Topology -Path $path
+        $reloaded.Edges[0].Details.Level1.Level2.Level3 | Should -Be 'deep-value'
+    }
+
+    It 'Throws when imported file is missing Nodes' {
+        $badPath = Join-Path $script:TestDataPath 'topo-bad.json'
+        @{ Edges = @(); Subnets = @() } | ConvertTo-Json -Depth 5 | Out-File -FilePath $badPath -Force
+        { Import-Topology -Path $badPath } | Should -Throw "*missing*Nodes*"
+    }
+
+    It 'Refuses to overwrite without -Force and honors -WhatIf' {
+        $topo = Import-Inventory -Path $script:TestInventoryPath
+        $path = Join-Path $script:TestDataPath 'topo-force.json'
+        $topo | Export-Topology -OutFile $path -Force
+        { $topo | Export-Topology -OutFile $path } | Should -Throw "*already exists*Use -Force*"
+        $whatIfPath = Join-Path $script:TestDataPath 'topo-whatif.json'
+        $topo | Export-Topology -OutFile $whatIfPath -WhatIf
+        Test-Path $whatIfPath | Should -Be $false
     }
 }
 

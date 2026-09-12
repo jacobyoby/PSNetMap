@@ -45,3 +45,9 @@ CODEX_REVIEW.txt
 *-review.txt
 *review*.log
 review-*.md
+
+# Claude Code: track the shared settings and hooks; personal state stays local.
+!.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/

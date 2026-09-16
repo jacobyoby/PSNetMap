@@ -40,9 +40,9 @@ function Compare-NetworkScans {
 
     # Load files (topology via Import-Topology for validation)
     try {
-        $baseMeta = Get-Content -Path $BaselineMetadata -Raw | ConvertFrom-Json
+        $baseMeta = Get-Content -LiteralPath $BaselineMetadata -Raw | ConvertFrom-Json
         $baseTopoData = Import-Topology -Path $BaselineTopology
-        $currMeta = Get-Content -Path $CurrentMetadata -Raw | ConvertFrom-Json
+        $currMeta = Get-Content -LiteralPath $CurrentMetadata -Raw | ConvertFrom-Json
         $currTopoData = Import-Topology -Path $CurrentTopology
     }
     catch {
@@ -195,7 +195,7 @@ function Compare-NetworkScans {
 
     if ($OutFile) {
         try {
-            $reportText | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            $reportText | Out-File -LiteralPath $OutFile -Encoding utf8 -Force
             Write-Verbose "Comparison report written to $OutFile"
         }
         catch {

@@ -20,12 +20,12 @@ function Import-Inventory {
     )
 
     process {
-        if (-not (Test-Path -Path $Path -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
             throw "Inventory file not found: $Path"
         }
 
         try {
-            $inventory = Get-Content -Path $Path -Raw | ConvertFrom-Json
+            $inventory = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
         }
         catch {
             throw "Failed to parse inventory JSON: $_"

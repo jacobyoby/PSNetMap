@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Literal path handling for JSON inputs and diagram output.** `Import-Inventory`,
+  SNMP credential-map readers, `Compare-NetworkScans` metadata inputs, and
+  `Export-DrawIO` now use `-LiteralPath` so paths containing `[]` or other
+  wildcard metacharacters work on all platforms.
+
 ## [1.4.0] - 2026-09-09
 
 ### Added

@@ -73,12 +73,12 @@ function Get-SnmpNeighbors {
             throw "Invalid topology object"
         }
 
-        if (-not (Test-Path -Path $CredentialMapPath -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath $CredentialMapPath -PathType Leaf)) {
             throw "Credential map file not found: $CredentialMapPath"
         }
 
         try {
-            $credMap = Get-Content -Path $CredentialMapPath -Raw | ConvertFrom-Json
+            $credMap = Get-Content -LiteralPath $CredentialMapPath -Raw | ConvertFrom-Json
         }
         catch {
             throw "Failed to parse credential map JSON: $_"

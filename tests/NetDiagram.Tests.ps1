@@ -99,6 +99,15 @@ Describe 'Import-Inventory' {
         { Import-Inventory -Path 'C:\NonExistent\file.json' } | Should -Throw
     }
 
+    It 'Reads inventory paths that contain wildcard metacharacters literally' {
+        $path = Join-Path $TestDrive 'inventory[bracket].json'
+        '{"knownDevices":[{"ip":"10.0.0.5","hostname":"bracket-host"}]}' | Set-Content -LiteralPath $path
+
+        $topology = Import-Inventory -Path $path
+        $topology.Nodes | Should -HaveCount 1
+        $topology.Nodes[0].IP | Should -Be '10.0.0.5'
+    }
+
     It 'Accepts a valid empty inventory' {
         $path = Join-Path $TestDrive 'empty-inventory.json'
         '{"knownDevices":[],"subnets":[]}' | Set-Content -Path $path
@@ -490,6 +499,30 @@ Describe 'Export-DrawIO' {
 
         # Try to load as XML to verify it's valid
         { [xml](Get-Content -Path $drawioPath -Raw) } | Should -Not -Throw
+    }
+
+    It 'Escapes XML metacharacters in node labels and attributes' {
+        $path = Join-Path $TestDrive 'xml-special.json'
+        @{
+            knownDevices = @(
+                @{
+                    ip       = '10.0.0.99'
+                    hostname = 'host<script>&"quote"'
+                    role     = 'server'
+                    vendor   = 'Acme & Co'
+                }
+            )
+        } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path
+
+        $topology = Import-Inventory -Path $path
+        $drawioPath = Join-Path $TestDrive 'xml-special[1].drawio'
+        $topology | Export-DrawIO -OutFile $drawioPath -Force
+
+        $xml = [xml](Get-Content -LiteralPath $drawioPath -Raw)
+        $node = $xml.SelectSingleNode("//UserObject[@ip='10.0.0.99']")
+        $node | Should -Not -BeNullOrEmpty
+        $node.hostname | Should -Be 'host<script>&"quote"'
+        $node.vendor | Should -Be 'Acme & Co'
     }
 }
 

@@ -316,7 +316,7 @@ function Export-DrawIO {
 
         # Write to file
         try {
-            $xml.ToString() | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            $xml.ToString() | Out-File -LiteralPath $OutFile -Encoding utf8 -Force
             Write-Verbose "Exported diagram to $OutFile"
         }
         catch {

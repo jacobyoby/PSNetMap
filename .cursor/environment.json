@@ -1,0 +1,8 @@
+{
+  "name": "NetDiagram-PS",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "user": "ubuntu",
+  "install": "bash ./.cursor/install.sh"
+}

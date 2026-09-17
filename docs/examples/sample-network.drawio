@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net">
+  <diagram id="Net" name="Network">
+    <mxGraphModel>
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="7" value="Main Network
+192.168.1.0/24" style="swimlane;fontSize=14;fontStyle=1;fillColor=#f5f5f5;strokeColor=#666666;rounded=1;" parent="1" vertex="1">
+          <mxGeometry x="20" y="20" width="800" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="8" value="IPv6 Lab
+2001:db8::/32" style="swimlane;fontSize=14;fontStyle=1;fillColor=#f5f5f5;strokeColor=#666666;rounded=1;" parent="1" vertex="1">
+          <mxGeometry x="870" y="20" width="800" height="150" as="geometry"/>
+        </mxCell>
+        <UserObject id="2" label="my-router&#xa;192.168.1.1" tooltip="IP: 192.168.1.1&#xa;Hostname: my-router&#xa;Role: router&#xa;Vendor: Cisco&#xa;OS: IOS 15.x&#xa;Layer: Core&#xa;Status: Reachable" ip="192.168.1.1" hostname="my-router" role="router" vendor="Cisco" os="IOS 15.x" layer="Core" status="Reachable">
+          <mxCell style="shape=mxgraph.cisco.routers.router;rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=top;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;fontSize=12;fontFamily=Helvetica;spacingTop=10;" parent="7" vertex="1">
+            <mxGeometry x="20" y="40" width="140" height="80" as="geometry"/>
+          </mxCell>
+        </UserObject>
+        <UserObject id="6" label="my-v6-router&#xa;2001:db8::1" tooltip="IP: 2001:db8::1&#xa;Hostname: my-v6-router&#xa;Role: router&#xa;Vendor: Cisco&#xa;OS: IOS 15.x&#xa;Layer: Core&#xa;Status: Unknown" ip="2001:db8::1" hostname="my-v6-router" role="router" vendor="Cisco" os="IOS 15.x" layer="Core" status="Unknown">
+          <mxCell style="shape=mxgraph.cisco.routers.router;rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=top;fillColor=#f5f5f5;strokeColor=#666666;shadow=1;fontSize=12;fontFamily=Helvetica;spacingTop=10;" parent="8" vertex="1">
+            <mxGeometry x="20" y="40" width="140" height="80" as="geometry"/>
+          </mxCell>
+        </UserObject>
+        <UserObject id="3" label="my-switch&#xa;192.168.1.10" tooltip="IP: 192.168.1.10&#xa;Hostname: my-switch&#xa;Role: switch&#xa;Vendor: Cisco&#xa;OS: IOS 15.x&#xa;Layer: Access&#xa;Status: Reachable" ip="192.168.1.10" hostname="my-switch" role="switch" vendor="Cisco" os="IOS 15.x" layer="Access" status="Reachable">
+          <mxCell style="shape=mxgraph.cisco.switches.workgroup_switch;rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=top;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;fontSize=12;fontFamily=Helvetica;spacingTop=10;" parent="7" vertex="1">
+            <mxGeometry x="210" y="40" width="140" height="80" as="geometry"/>
+          </mxCell>
+        </UserObject>
+        <UserObject id="5" label="my-workstation&#xa;192.168.1.200" tooltip="IP: 192.168.1.200&#xa;Hostname: my-workstation&#xa;Role: workstation&#xa;Vendor: HP&#xa;OS: Windows 11&#xa;Layer: Access&#xa;Status: Unreachable" ip="192.168.1.200" hostname="my-workstation" role="workstation" vendor="HP" os="Windows 11" layer="Access" status="Unreachable">
+          <mxCell style="shape=mxgraph.cisco.computers_and_peripherals.pc;rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=top;fillColor=#f8cecc;strokeColor=#b85450;shadow=1;fontSize=12;fontFamily=Helvetica;spacingTop=10;" parent="7" vertex="1">
+            <mxGeometry x="400" y="40" width="140" height="80" as="geometry"/>
+          </mxCell>
+        </UserObject>
+        <UserObject id="4" label="my-server&#xa;192.168.1.100" tooltip="IP: 192.168.1.100&#xa;Hostname: my-server&#xa;Role: server&#xa;Vendor: Dell&#xa;OS: Ubuntu 22.04&#xa;Layer: Servers&#xa;Status: Unknown" ip="192.168.1.100" hostname="my-server" role="server" vendor="Dell" os="Ubuntu 22.04" layer="Servers" status="Unknown">
+          <mxCell style="shape=mxgraph.cisco.servers.generic_server;rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=top;fillColor=#f5f5f5;strokeColor=#666666;shadow=1;fontSize=12;fontFamily=Helvetica;spacingTop=10;" parent="7" vertex="1">
+            <mxGeometry x="590" y="40" width="140" height="80" as="geometry"/>
+          </mxCell>
+        </UserObject>
+        <mxCell id="9" value="L2-SNMP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;fontSize=11;fontFamily=Helvetica;strokeColor=#2D7600;strokeWidth=2.5;endArrow=classic;endFill=1;shadow=0;" parent="1" source="2" target="3" edge="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="10" value="L2-FDB" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;fontSize=11;fontFamily=Helvetica;strokeColor=#0B7285;strokeWidth=2;dashed=0;endArrow=classic;endFill=1;shadow=0;" parent="1" source="3" target="4" edge="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="11" value="L3-Inferred" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;fontSize=11;fontFamily=Helvetica;strokeColor=#808080;strokeWidth=1.5;dashed=1;dashPattern=5 5;endArrow=classic;endFill=0;shadow=0;" parent="1" source="3" target="5" edge="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
+

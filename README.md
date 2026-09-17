@@ -22,15 +22,23 @@ exports to Mermaid, NetBox, and CSV.
 ```mermaid
 flowchart LR
   subgraph "Main Network 192.168.1.0/24"
-    r["my-router 192.168.1.1"]
-    s["my-switch 192.168.1.10"]
-    srv["my-server 192.168.1.100"]
-    pc["my-workstation 192.168.1.200"]
+    192_168_1_1["my-router 192.168.1.1"]
+    192_168_1_10["my-switch 192.168.1.10"]
+    192_168_1_100["my-server 192.168.1.100"]
+    192_168_1_200["my-workstation 192.168.1.200"]
   end
-  r -->|L2-SNMP| s
-  s -->|L2-FDB| srv
-  s -.->|L3-Inferred| pc
+  subgraph "IPv6 Lab 2001:db8::/32"
+    2001_db8__1["my-v6-router 2001:db8::1"]
+  end
+  192_168_1_1 --> |L2-SNMP| 192_168_1_10
+  192_168_1_10 --> |L2-FDB| 192_168_1_100
+  192_168_1_10 -.-> |L3-Inferred| 192_168_1_200
 ```
+
+> This is the verbatim output of [`Export-Mermaid`](NetDiagram-PS/Public/Export-Mermaid.ps1)
+> for the sample below — open [`docs/examples/sample-network.mmd`](docs/examples/sample-network.mmd)
+> or the same topology as [`docs/examples/sample-network.drawio`](docs/examples/sample-network.drawio)
+> (real `Export-DrawIO` output, opens in diagrams.net).
 
 ---
 

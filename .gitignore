@@ -1,5 +1,7 @@
 # User-generated files (create these in YOUR workspace, NOT in module root)
 *.drawio
+# Exception: committed demo sample with fictitious example-inventory data
+!docs/examples/sample-network.drawio
 *-inventory.json
 *-network*.json
 *.drawio.bkp

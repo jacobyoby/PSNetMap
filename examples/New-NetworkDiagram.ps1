@@ -703,7 +703,7 @@ if ($MyInvocation.InvocationName -eq '.') { return }
 
 # Import the module
 $modulePath = Join-Path $PSScriptRoot '..' 'NetDiagram-PS' 'NetDiagram-PS.psd1'
-if (-not (Test-Path $modulePath)) {
+if (-not (Test-Path -LiteralPath $modulePath)) {
     Write-Host "✗ Module not found at: $modulePath" -ForegroundColor Red
     Write-Host "  Please run this script from the examples/ folder or ensure NetDiagram-PS module is installed." -ForegroundColor Yellow
     exit 1
@@ -1290,8 +1290,8 @@ Write-Host "`n[5/5] Generating your network diagram..." -ForegroundColor Yellow
 $inventoryPath = Get-InventoryOutputPath -DiagramPath $OutputPath
 $topology | Export-DrawIO -OutFile $OutputPath -Force
 
-if (Test-Path $OutputPath) {
-    $fileSize = (Get-Item $OutputPath).Length
+if (Test-Path -LiteralPath $OutputPath) {
+    $fileSize = (Get-Item -LiteralPath $OutputPath).Length
     Write-Host "      ✓ Created: $OutputPath ($fileSize bytes)" -ForegroundColor Green
 }
 
@@ -1299,7 +1299,7 @@ if (Test-Path $OutputPath) {
 # distinct sibling inventory file (Import-Inventory dual-stack contract).
 $inventoryData = New-WizardInventoryObject -Nodes $nodes -Subnets $subnets
 
-$inventoryData | ConvertTo-Json -Depth 10 | Out-File -FilePath $inventoryPath -Encoding utf8 -Force
+$inventoryData | ConvertTo-Json -Depth 10 | Out-File -LiteralPath $inventoryPath -Encoding utf8 -Force
 Write-Host "      ✓ Saved inventory: $inventoryPath" -ForegroundColor Green
 
 # Summary

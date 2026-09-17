@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-17
+
 ### Fixed
 - **Literal path handling for JSON inputs and diagram output.** `Import-Inventory`,
   SNMP credential-map readers, `Compare-NetworkScans` metadata inputs, and
@@ -16,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Export-Topology`, `Export-Mermaid`, `Export-NodeInventoryCsv`, and
   `Export-NetBox` now write with `Out-File -LiteralPath` (CSV row export
   already used `-LiteralPath`).
+- **Wizard output paths.** `examples/New-NetworkDiagram.ps1` uses
+  `-LiteralPath` when writing the diagram inventory and checking the draw.io
+  output file.
 
 ## [1.4.0] - 2026-09-09
 
@@ -262,6 +267,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.0.0]: https://github.com/jacobyoby/PSNetMap/releases/tag/v1.0.0
 [1.1.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.1.0...v1.2.0
-[unreleased]: https://github.com/jacobyoby/PSNetMap/compare/v1.4.0...HEAD
+[unreleased]: https://github.com/jacobyoby/PSNetMap/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/jacobyoby/PSNetMap/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/jacobyoby/PSNetMap/compare/v1.2.0...v1.3.0

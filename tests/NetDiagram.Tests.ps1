@@ -557,6 +557,14 @@ Describe 'Export-Metadata' {
         $metadata = Get-Content -Path $metaPath -Raw | ConvertFrom-Json
         $metadata.credSetsUsed | Should -HaveCount 0
     }
+
+    It 'Writes metadata to paths that contain wildcard metacharacters literally' {
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        $metaPath = Join-Path $TestDrive 'scan-meta[1].json'
+        $topology | Export-Metadata -OutFile $metaPath -Force
+        Test-Path -LiteralPath $metaPath | Should -Be $true
+        (Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json).nodeCount | Should -Be $topology.Nodes.Count
+    }
 }
 
 Describe 'Compare-NetworkScans' {
@@ -602,6 +610,26 @@ Describe 'Compare-NetworkScans' {
         $report = Get-Content -Path $reportPath -Raw
         $report | Should -Match 'Added Nodes'
         $report | Should -Match '192.168.1.30'
+    }
+
+    It 'Compares scans when metadata, topology, and report paths contain bracket metacharacters' {
+        $baseline = Import-Inventory -Path $script:TestInventoryPath
+        $baselineMeta = Join-Path $TestDrive 'baseline[1]-meta.json'
+        $baselineTopo = Join-Path $TestDrive 'baseline[1]-topo.json'
+        $baseline | Export-Metadata -OutFile $baselineMeta -Force
+        $baseline | Export-Topology -OutFile $baselineTopo -Force
+
+        $current = Import-Inventory -Path $script:TestInventoryPath
+        $currentMeta = Join-Path $TestDrive 'current[1]-meta.json'
+        $currentTopo = Join-Path $TestDrive 'current[1]-topo.json'
+        $current | Export-Metadata -OutFile $currentMeta -Force
+        $current | Export-Topology -OutFile $currentTopo -Force
+
+        $reportPath = Join-Path $TestDrive 'compare[1].md'
+        { Compare-NetworkScans -BaselineMetadata $baselineMeta -BaselineTopology $baselineTopo `
+                               -CurrentMetadata $currentMeta -CurrentTopology $currentTopo `
+                               -OutFile $reportPath } | Should -Not -Throw
+        Test-Path -LiteralPath $reportPath | Should -Be $true
     }
 }
 
@@ -732,6 +760,14 @@ Describe 'Topology persistence (#34 regression)' {
         $topo | Export-Topology -OutFile $whatIfPath -WhatIf
         Test-Path $whatIfPath | Should -Be $false
     }
+
+    It 'Round-trips topology files whose paths contain bracket metacharacters' {
+        $topo = Import-Inventory -Path $script:TestInventoryPath
+        $path = Join-Path $TestDrive 'topology[export].json'
+        $topo | Export-Topology -OutFile $path -Force
+        $reloaded = Import-Topology -Path $path
+        $reloaded.Nodes.Count | Should -Be $topo.Nodes.Count
+    }
 }
 
 Describe 'Export-NodeInventoryCsv (#41 regression)' {
@@ -778,6 +814,14 @@ Describe 'Export-NodeInventoryCsv (#41 regression)' {
         $lines = @(Get-Content $path)
         $lines.Count | Should -Be 1
         $lines[0] | Should -Be 'IP,Hostname,Role,Layer,Vendor,OS,Reachable,MACAddress,OpenPorts'
+    }
+
+    It 'Writes header-only CSV to bracketed paths literally' {
+        $topo = [pscustomobject]@{ Nodes=@(); Edges=@(); Subnets=@() }
+        $path = Join-Path $TestDrive 'nodes[empty].csv'
+        $topo | Export-NodeInventoryCsv -OutFile $path -Force
+        Test-Path -LiteralPath $path | Should -Be $true
+        (Get-Content -LiteralPath $path).Count | Should -Be 1
     }
 
     It 'Joins OpenPorts with semicolon and respects -Force/-WhatIf' {
@@ -1362,6 +1406,17 @@ Describe 'Get-SnmpNeighbors node eligibility' {
         Mock Invoke-SnmpWalk { @() } -ModuleName 'NetDiagram-PS'
 
         $null = $topology | Get-SnmpNeighbors -CredentialMapPath $script:CredMapPath -TryPublic -WarningAction SilentlyContinue
+
+        Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 3 -Exactly
+    }
+
+    It 'Reads credential map paths that contain wildcard metacharacters literally' {
+        $credPath = Join-Path $TestDrive 'credmap[lab].json'
+        '{}' | Set-Content -LiteralPath $credPath
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        Mock Invoke-SnmpWalk { @() } -ModuleName 'NetDiagram-PS'
+
+        $null = $topology | Get-SnmpNeighbors -CredentialMapPath $credPath -TryPublic -WarningAction SilentlyContinue
 
         Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 3 -Exactly
     }
@@ -2192,6 +2247,18 @@ Describe 'Export-Mermaid (#37 regression)' {
         $content | Should -Not -Match '"bad'
     }
 
+    It 'Writes Mermaid to paths that contain wildcard metacharacters literally' {
+        $topo = [pscustomobject]@{
+            Nodes = @([pscustomobject]@{ IP='10.0.0.1'; Hostname='gw'; Role='unknown'; Layer='Core'; Vendor='X'; OS='X'; Reachable=$null })
+            Edges = @()
+            Subnets = @([pscustomobject]@{ CIDR='10.0.0.0/24'; Label='Net'; VLAN=1 })
+        }
+        $path = Join-Path $TestDrive 'diagram[1].mmd'
+        $topo | Export-Mermaid -OutFile $path -Force
+        Test-Path -LiteralPath $path | Should -Be $true
+        (Get-Content -LiteralPath $path -Raw) | Should -Match '^flowchart LR'
+    }
+
     It 'Respects -Force and -WhatIf' {
         $topo = Invoke-NetworkDiscovery -Cidr '10.0.1.0/24' -ScanDepth Quick
         $path = Join-Path $script:TestDataPath 'mermaid-force.mmd'
@@ -2242,6 +2309,14 @@ Describe 'Export-NetBox (#38 regression)' {
         $whatIf = Join-Path $script:TestDataPath 'netbox-whatif.csv'
         $topo | Export-NetBox -OutFile $whatIf -Site 'HQ' -WhatIf
         Test-Path $whatIf | Should -Be $false
+    }
+
+    It 'Writes header-only NetBox CSV to bracketed paths literally' {
+        $topo = [pscustomobject]@{ Nodes=@(); Edges=@(); Subnets=@() }
+        $path = Join-Path $TestDrive 'netbox[empty].csv'
+        $topo | Export-NetBox -OutFile $path -Site 'HQ' -Force
+        Test-Path -LiteralPath $path | Should -Be $true
+        (Get-Content -LiteralPath $path).Count | Should -Be 1
     }
 }
 

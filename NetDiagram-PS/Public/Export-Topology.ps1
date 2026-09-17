@@ -38,7 +38,7 @@ function Export-Topology {
             return
         }
         try {
-            $Topology | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            $Topology | ConvertTo-Json -Depth 10 | Out-File -LiteralPath $OutFile -Encoding utf8 -Force
             Write-Verbose "Exported topology to $OutFile"
         }
         catch {

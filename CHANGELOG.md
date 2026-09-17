@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SNMP credential-map readers, `Compare-NetworkScans` metadata inputs, and
   `Export-DrawIO` now use `-LiteralPath` so paths containing `[]` or other
   wildcard metacharacters work on all platforms.
+- **Literal path handling for remaining exporters.** `Export-Metadata`,
+  `Export-Topology`, `Export-Mermaid`, `Export-NodeInventoryCsv`, and
+  `Export-NetBox` now write with `Out-File -LiteralPath` (CSV row export
+  already used `-LiteralPath`).
 
 ## [1.4.0] - 2026-09-09
 

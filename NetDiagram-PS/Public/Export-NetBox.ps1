@@ -84,7 +84,7 @@ function Export-NetBox {
         }
 
         if ($null -eq $rows -or @($rows).Count -eq 0) {
-            'name,role,manufacturer,device_type,site,status,primary_ip4,primary_ip6' | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            'name,role,manufacturer,device_type,site,status,primary_ip4,primary_ip6' | Out-File -LiteralPath $OutFile -Encoding utf8 -Force
         }
         else {
             $rows | Export-Csv -LiteralPath $OutFile -NoTypeInformation -Encoding utf8 -Force

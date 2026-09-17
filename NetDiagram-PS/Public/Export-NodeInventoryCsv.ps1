@@ -54,7 +54,7 @@ function Export-NodeInventoryCsv {
         }
         # Ensure header-only file for empty topology (Export-Csv would create 0-byte file)
         if ($null -eq $rows -or @($rows).Count -eq 0) {
-            'IP,Hostname,Role,Layer,Vendor,OS,Reachable,MACAddress,OpenPorts' | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            'IP,Hostname,Role,Layer,Vendor,OS,Reachable,MACAddress,OpenPorts' | Out-File -LiteralPath $OutFile -Encoding utf8 -Force
         }
         else {
             $rows | Export-Csv -LiteralPath $OutFile -NoTypeInformation -Encoding utf8 -Force

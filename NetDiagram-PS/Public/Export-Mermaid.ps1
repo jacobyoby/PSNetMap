@@ -93,7 +93,7 @@ function Export-Mermaid {
         }
 
         try {
-            $sb.ToString() | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            $sb.ToString() | Out-File -LiteralPath $OutFile -Encoding utf8 -Force
             Write-Verbose "Exported Mermaid to $OutFile"
         }
         catch {

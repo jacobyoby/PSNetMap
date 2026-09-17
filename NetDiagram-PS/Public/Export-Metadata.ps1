@@ -69,7 +69,7 @@ function Export-Metadata {
         }
 
         try {
-            $metadata | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutFile -Encoding utf8 -Force
+            $metadata | ConvertTo-Json -Depth 10 | Out-File -LiteralPath $OutFile -Encoding utf8 -Force
             Write-Verbose "Exported metadata to $OutFile"
         }
         catch {

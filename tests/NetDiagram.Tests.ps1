@@ -853,7 +853,8 @@ Describe 'Get-SnmpBridgeNeighbors (#39 regression)' {
 
         $null = $topology | Get-SnmpBridgeNeighbors -CredentialMapPath $credPath -TryPublic -WarningAction SilentlyContinue
 
-        Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 3 -Exactly
+        # Three BRIDGE-MIB columns per eligible node (test inventory has 3 nodes).
+        Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 9 -Exactly
     }
 
     It 'Produces edges from BRIDGE-MIB snmpwalk text for learned MACs with ARP matches' {

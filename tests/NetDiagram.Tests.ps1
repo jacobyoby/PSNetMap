@@ -845,6 +845,18 @@ Describe 'Get-SnmpBridgeNeighbors (#39 regression)' {
         '{}' | Out-File -FilePath $script:CredMapPath -Force
     }
 
+    It 'Reads credential map paths that contain wildcard metacharacters literally' {
+        $credPath = Join-Path $TestDrive 'credmap-bridge[lab].json'
+        '{}' | Set-Content -LiteralPath $credPath
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        Mock Invoke-SnmpWalk { @() } -ModuleName 'NetDiagram-PS'
+
+        $null = $topology | Get-SnmpBridgeNeighbors -CredentialMapPath $credPath -TryPublic -WarningAction SilentlyContinue
+
+        # Three BRIDGE-MIB columns per eligible node (test inventory has 3 nodes).
+        Should -Invoke Invoke-SnmpWalk -ModuleName 'NetDiagram-PS' -Times 9 -Exactly
+    }
+
     It 'Produces edges from BRIDGE-MIB snmpwalk text for learned MACs with ARP matches' {
         # Simulated snmpwalk output for three BRIDGE-MIB columns:
         #   dot1dTpFdbAddress (1.3.6.1.2.1.17.4.3.1.1) — MAC as Hex-STRING

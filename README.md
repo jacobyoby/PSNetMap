@@ -1,8 +1,48 @@
 # NetDiagram-PS
 
-NetDiagram-PS is a cross-platform PowerShell 7.4+ module that discovers your network topology and generates draw.io diagrams with Cisco network icons, subnet containers, and consistent styling.
+[![CI](https://github.com/jacobyoby/PSNetMap/actions/workflows/ci.yml/badge.svg)](https://github.com/jacobyoby/PSNetMap/actions/workflows/ci.yml)
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/NetDiagram-PS)](https://www.powershellgallery.com/packages/NetDiagram-PS)
+[![License: MIT](https://img.shields.io/github/license/jacobyoby/PSNetMap)](LICENSE)
+[![PowerShell 7.4+](https://img.shields.io/badge/powershell-7.4%2B-blue)](https://aka.ms/powershell)
+
+**Discover your network, diagram it, track how it changes.** NetDiagram-PS is a cross-platform
+PowerShell 7.4+ module that scans your LAN (IPv4 + IPv6 neighbor discovery, SNMP/LLDP/CDP,
+nmap import), generates draw.io diagrams with Cisco-style icons and subnet containers, and
+exports to Mermaid, NetBox, and CSV.
 
 **✓ Windows | ✓ macOS | ✓ Linux**
+
+![Example network diagram](docs/images/example-network.svg)
+
+> Web preview of `Export-DrawIO` output for the bundled
+> [`examples/inventory-template.json`](examples/inventory-template.json).
+> Open the generated `.drawio` file in [diagrams.net](https://app.diagrams.net/) for full
+> Cisco icons, or see the same topology as a live Mermaid flowchart below.
+
+```mermaid
+flowchart LR
+  subgraph "Main Network 192.168.1.0/24"
+    r["my-router 192.168.1.1"]
+    s["my-switch 192.168.1.10"]
+    srv["my-server 192.168.1.100"]
+    pc["my-workstation 192.168.1.200"]
+  end
+  r -->|L2-SNMP| s
+  s -->|L2-FDB| srv
+  s -.->|L3-Inferred| pc
+```
+
+---
+
+## What you get
+
+| Output | Command | Opens in |
+|--------|---------|----------|
+| draw.io diagram (Cisco icons, subnet containers, reachability colors) | `Export-DrawIO` | [diagrams.net](https://app.diagrams.net/) |
+| Mermaid flowchart (subnet subgraphs, L2 solid / L3 dotted) | `Export-Mermaid` | GitHub, docs, wikis |
+| NetBox bulk-import CSV (devices) | `Export-NetBox` | NetBox |
+| Node inventory CSV | `Export-NodeInventoryCsv` | Excel, CMDB |
+| Topology snapshot JSON + scan metadata | `Export-Topology` / `Export-Metadata` | `Compare-NetworkScans` drift reports |
 
 ---
 
@@ -64,6 +104,7 @@ Available at [powershellgallery.com/packages/NetDiagram-PS](https://www.powershe
 ```powershell
 git clone https://github.com/jacobyoby/PSNetMap.git
 Import-Module ./PSNetMap/NetDiagram-PS/NetDiagram-PS.psd1
+# (from inside the cloned PSNetMap folder, the module is at ./NetDiagram-PS/NetDiagram-PS.psd1)
 ```
 
 See [PUBLISHING.md](PUBLISHING.md) for how the module is packaged and released to the Gallery.

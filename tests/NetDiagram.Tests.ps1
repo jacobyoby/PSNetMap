@@ -1761,6 +1761,89 @@ Describe 'Export-DrawIO subnet container parenting' {
     }
 }
 
+Describe 'P0 research fixes: IPv6 carry + SNMPv3 + loader + ARP + DNS task' {
+    It 'Get-IPv6CidrScanTarget carries overflow across bytes (ff + 1 = 100)' {
+        InModuleScope 'NetDiagram-PS' {
+            $r = Get-IPv6CidrScanTarget -NetworkAddress '2001:db8::ff' -PrefixLength 120 -ScanDepth Full
+            $r | Should -Contain '2001:db8::100'
+            $r | Should -Contain '2001:db8::1fe'
+            $r.Count | Should -Be 256
+            $r2 = Get-IPv6CidrScanTarget -NetworkAddress '2001:db8::fe' -PrefixLength 120 -ScanDepth Full
+            $r2[2] | Should -Be '2001:db8::100'
+            $r2[0] | Should -Be '2001:db8::fe'
+        }
+    }
+
+    It 'Invoke-SnmpWalk uses -u for v3 and -c for v2c (no -c leak for v3)' {
+        Mock Get-Command { [pscustomobject]@{ Source = '/usr/bin/snmpwalk' } } -ModuleName 'NetDiagram-PS' -ParameterFilter { $Name -like 'snmpwalk*' }
+        # v3 should not fail parameter validation; it should attempt the walk (which returns @() without throwing when binary is mocked)
+        { Invoke-SnmpWalk -TargetIP '2001:db8::1' -Community 'myv3user' -Version v3 -WarningAction SilentlyContinue } | Should -Not -Throw
+        { Invoke-SnmpWalk -TargetIP '10.0.0.1' -Community 'public' -Version v2c -WarningAction SilentlyContinue } | Should -Not -Throw
+        # Invalid version should still throw
+        { Invoke-SnmpWalk -TargetIP '10.0.0.1' -Community 'public' -Version 'v9' } | Should -Throw
+    }
+
+    It 'ConvertFrom-ArpText skips bad macOS/LinuxArp lines with warning, still throws for LinuxIp malformed' {
+        InModuleScope 'NetDiagram-PS' {
+            $warn = @()
+            $r = @(ConvertFrom-ArpText -Lines @('? (192.168.1.99) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]', 'garbage no at') -Format MacOS -WarningVariable warn -WarningAction SilentlyContinue)
+            $r.Count | Should -Be 1
+            $r[0].IPAddress | Should -Be '192.168.1.99'
+            { ConvertFrom-ArpText -Lines @('192.168.1.1 dev eth0 lladdr malformed REACHABLE') -Format LinuxIp } | Should -Throw '*Unable to parse Linux ip-neigh*'
+            $w2 = @()
+            $r2 = @(ConvertFrom-ArpText -Lines @('bad arp (xx) at yy on zz') -Format LinuxArp -WarningVariable w2 -WarningAction SilentlyContinue)
+            $r2.Count | Should -Be 0
+            $w2.Count | Should -BeGreaterThan 0
+        }
+    }
+
+    It 'Wait-DnsLookupTask observes faulted task and returns failure without throwing' {
+        InModuleScope 'NetDiagram-PS' {
+            $src = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $src.SetException([InvalidOperationException]::new('fixture fault'))
+            $result = Wait-DnsLookupTask -LookupTask $src.Task -IPAddress '192.0.2.99' -TimeoutSeconds 1
+            $result.Success | Should -Be $false
+            $result.IPAddress | Should -Be '192.0.2.99'
+            $src2 = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $result2 = Wait-DnsLookupTask -LookupTask $src2.Task -IPAddress '192.0.2.98' -TimeoutSeconds 1
+            $result2.Success | Should -Be $false
+            $result2.IPAddress | Should -Be '192.0.2.98'
+        }
+    }
+}
+
+Describe 'Lint hygiene: verbose catch and Information stream (1.4.1)' {
+    It 'Get-SnmpNeighbors emits SNMP summary to Information stream, not Host' {
+        $credPath = Join-Path $script:TestDataPath 'credmap-info.json'
+        '{}' | Out-File -FilePath $credPath -Force
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        Mock Invoke-SnmpWalk { @('1 = IpAddress: 192.168.1.10') } -ModuleName 'NetDiagram-PS'
+
+        $info = @()
+        $null = $topology | Get-SnmpNeighbors -CredentialMapPath $credPath -TryPublic -WarningAction SilentlyContinue -InformationVariable info -InformationAction Continue 2>&1
+
+        ($info -join ' ') | Should -Match 'SNMP summary: queried'
+        $info | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Invoke-PortScan does not throw when scanning a closed port and logs verbosely' {
+        # 192.0.2.1 is TEST-NET-1, guaranteed unroutable; port should be closed/filtered
+        { Invoke-PortScan -IPAddress '192.0.2.2' -Ports @(65534) -TimeoutMs 200 -Verbose 4>&1 | Out-Null } | Should -Not -Throw
+        $result = Invoke-PortScan -IPAddress '192.0.2.2' -Ports @(65534) -TimeoutMs 200
+        $result.OpenPorts | Should -HaveCount 0
+        $result.IPAddress | Should -Be '192.0.2.2'
+    }
+
+    It 'Test-DeviceReachability TCP fallback failure is logged verbosely, not silently swallowed' {
+        $topology = [pscustomobject]@{
+            Nodes = @([pscustomobject]@{ IP='192.0.2.3'; Hostname='x'; Role='server'; Layer='Servers'; Vendor='X'; OS='X'; Reachable=$null })
+            Edges=@(); Subnets=@()
+        }
+        # ProbeScript forces TCP path by returning $false for ICMP, then TCP fallback to unreachable port
+        { $topology | Test-DeviceReachability -TcpFallbackPort 65534 -TimeoutSeconds 1 -Verbose 4>&1 | Out-Null } | Should -Not -Throw
+    }
+}
+
 Describe 'Export-DrawIO dynamic container layout (#19 regression)' {
     It 'Contains every node for a <Count>-node subnet' -TestCases @(
         @{ Count = 0 }

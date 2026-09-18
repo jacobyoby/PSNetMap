@@ -26,7 +26,8 @@ function ConvertFrom-ArpText {
                 }
             }
             else {
-                throw "Unable to parse macOS ARP entry: $line"
+                Write-Warning "Skipping unparseable macOS ARP entry: $line"
+                continue
             }
         }
         elseif ($Format -eq 'LinuxIp') {
@@ -53,7 +54,13 @@ function ConvertFrom-ArpText {
         else {
             if ($line -notmatch '\s+at\s+') { continue }
             if ($line -notmatch '\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]{17})') {
-                throw "Unable to parse Linux arp entry: $line"
+                $parsed = $null
+                if ([System.Net.IPAddress]::TryParse(($line -replace '.*\(([^)]+)\).*', '$1'), [ref]$parsed)) {
+                    Write-Warning "Skipping unparseable Linux arp entry (invalid IP): $line"
+                } else {
+                    Write-Warning "Skipping unparseable Linux arp entry: $line"
+                }
+                continue
             }
             $entry = [pscustomobject]@{
                 IPAddress = $matches[1]; MACAddress = $matches[2].ToUpperInvariant()

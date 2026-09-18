@@ -45,7 +45,12 @@ function Get-IPv6CidrScanTarget {
 
         $bytes = [byte[]]::new(16)
         [Array]::Copy($baseBytes, $bytes, 16)
-        $bytes[15] = [byte]($baseBytes[15] + $offset)
+        $carry = $offset
+        for ($b = 15; $b -ge 0 -and $carry -gt 0; $b--) {
+            $sum = $bytes[$b] + $carry
+            $bytes[$b] = [byte]($sum -band 0xFF)
+            $carry = $sum -shr 8
+        }
         $null = $targets.Add(([System.Net.IPAddress]::new($bytes)).ToString())
     }
 

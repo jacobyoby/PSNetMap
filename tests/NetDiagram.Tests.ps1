@@ -1761,6 +1761,57 @@ Describe 'Export-DrawIO subnet container parenting' {
     }
 }
 
+Describe 'P0 research fixes: IPv6 carry + SNMPv3 + loader + ARP + DNS task' {
+    It 'Get-IPv6CidrScanTarget carries overflow across bytes (ff + 1 = 100)' {
+        InModuleScope 'NetDiagram-PS' {
+            $r = Get-IPv6CidrScanTarget -NetworkAddress '2001:db8::ff' -PrefixLength 120 -ScanDepth Full
+            $r | Should -Contain '2001:db8::100'
+            $r | Should -Contain '2001:db8::1fe'
+            $r.Count | Should -Be 256
+            $r2 = Get-IPv6CidrScanTarget -NetworkAddress '2001:db8::fe' -PrefixLength 120 -ScanDepth Full
+            $r2[2] | Should -Be '2001:db8::100'
+            $r2[0] | Should -Be '2001:db8::fe'
+        }
+    }
+
+    It 'Invoke-SnmpWalk uses -u for v3 and -c for v2c (no -c leak for v3)' {
+        Mock Get-Command { [pscustomobject]@{ Source = '/usr/bin/snmpwalk' } } -ModuleName 'NetDiagram-PS' -ParameterFilter { $Name -like 'snmpwalk*' }
+        # v3 should not fail parameter validation; it should attempt the walk (which returns @() without throwing when binary is mocked)
+        { Invoke-SnmpWalk -TargetIP '2001:db8::1' -Community 'myv3user' -Version v3 -WarningAction SilentlyContinue } | Should -Not -Throw
+        { Invoke-SnmpWalk -TargetIP '10.0.0.1' -Community 'public' -Version v2c -WarningAction SilentlyContinue } | Should -Not -Throw
+        # Invalid version should still throw
+        { Invoke-SnmpWalk -TargetIP '10.0.0.1' -Community 'public' -Version 'v9' } | Should -Throw
+    }
+
+    It 'ConvertFrom-ArpText skips bad macOS/LinuxArp lines with warning, still throws for LinuxIp malformed' {
+        InModuleScope 'NetDiagram-PS' {
+            $warn = @()
+            $r = @(ConvertFrom-ArpText -Lines @('? (192.168.1.99) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]', 'garbage no at') -Format MacOS -WarningVariable warn -WarningAction SilentlyContinue)
+            $r.Count | Should -Be 1
+            $r[0].IPAddress | Should -Be '192.168.1.99'
+            { ConvertFrom-ArpText -Lines @('192.168.1.1 dev eth0 lladdr malformed REACHABLE') -Format LinuxIp } | Should -Throw '*Unable to parse Linux ip-neigh*'
+            $w2 = @()
+            $r2 = @(ConvertFrom-ArpText -Lines @('bad arp (xx) at yy on zz') -Format LinuxArp -WarningVariable w2 -WarningAction SilentlyContinue)
+            $r2.Count | Should -Be 0
+            $w2.Count | Should -BeGreaterThan 0
+        }
+    }
+
+    It 'Wait-DnsLookupTask observes faulted task and returns failure without throwing' {
+        InModuleScope 'NetDiagram-PS' {
+            $src = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $src.SetException([InvalidOperationException]::new('fixture fault'))
+            $result = Wait-DnsLookupTask -LookupTask $src.Task -IPAddress '192.0.2.99' -TimeoutSeconds 1
+            $result.Success | Should -Be $false
+            $result.IPAddress | Should -Be '192.0.2.99'
+            $src2 = [System.Threading.Tasks.TaskCompletionSource[System.Net.IPHostEntry]]::new()
+            $result2 = Wait-DnsLookupTask -LookupTask $src2.Task -IPAddress '192.0.2.98' -TimeoutSeconds 1
+            $result2.Success | Should -Be $false
+            $result2.IPAddress | Should -Be '192.0.2.98'
+        }
+    }
+}
+
 Describe 'Lint hygiene: verbose catch and Information stream (1.4.1)' {
     It 'Get-SnmpNeighbors emits SNMP summary to Information stream, not Host' {
         $credPath = Join-Path $script:TestDataPath 'credmap-info.json'

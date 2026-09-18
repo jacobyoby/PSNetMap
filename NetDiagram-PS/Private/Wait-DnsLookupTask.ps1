@@ -7,6 +7,8 @@ function Wait-DnsLookupTask {
 
     try {
         if ($LookupTask.Wait([TimeSpan]::FromSeconds($TimeoutSeconds))) {
+            if ($LookupTask.IsFaulted) { throw $LookupTask.Exception.InnerException ?? $LookupTask.Exception }
+            if ($LookupTask.IsCanceled) { throw [System.OperationCanceledException]::new("DNS lookup canceled for $IPAddress") }
             $result = $LookupTask.Result
             return [pscustomobject]@{
                 IPAddress = $IPAddress
@@ -16,10 +18,12 @@ function Wait-DnsLookupTask {
             }
         }
 
-        Write-Verbose "DNS lookup for $IPAddress timed out after $TimeoutSeconds second(s)"
+        Write-Verbose "DNS lookup for $IPAddress timed out after $TimeoutSeconds second(s) — abandoning task (observing fault to prevent UnobservedTaskException)"
+        if ($LookupTask.IsFaulted) { $null = $LookupTask.Exception }
     }
     catch {
         Write-Verbose "DNS lookup for $IPAddress failed: $($_.Exception.Message)"
+        if ($LookupTask.IsFaulted) { $null = $LookupTask.Exception }
     }
 
     return [pscustomobject]@{

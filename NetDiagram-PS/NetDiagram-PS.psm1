@@ -10,22 +10,25 @@
 #>
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
+$local:ErrorActionPreference = 'Stop'
 
 # Module-level variables
 $script:ModuleVersion = '1.4.1'
 
 # Dot-source private helpers first (so public functions can call them),
-# then public commands.
-$Private = @(Get-ChildItem -Path "$PSScriptRoot/Private/*.ps1" -ErrorAction SilentlyContinue)
-$Public  = @(Get-ChildItem -Path "$PSScriptRoot/Public/*.ps1"  -ErrorAction SilentlyContinue)
+# then public commands. Fail fast if directories are missing — SilentlyContinue
+# would hide a broken install as a half-loaded module.
+$Private = @(Get-ChildItem -Path "$PSScriptRoot/Private/*.ps1" -ErrorAction Stop)
+$Public  = @(Get-ChildItem -Path "$PSScriptRoot/Public/*.ps1" -ErrorAction Stop)
+if ($Private.Count -eq 0) { throw "NetDiagram-PS: no Private/*.ps1 files found under $PSScriptRoot" }
+if ($Public.Count -eq 0) { throw "NetDiagram-PS: no Public/*.ps1 files found under $PSScriptRoot" }
 
 foreach ($file in @($Private + $Public)) {
     try {
         . $file.FullName
     }
     catch {
-        Write-Error "Failed to import $($file.FullName): $_"
+        throw "Failed to import $($file.FullName): $_"
     }
 }
 

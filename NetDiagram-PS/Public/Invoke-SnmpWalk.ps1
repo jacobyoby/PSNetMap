@@ -80,24 +80,39 @@ function Invoke-SnmpWalk {
     }
 
     try {
-        $arguments = @(
-            '-' + $Version.ToLower()
-            '-c', $Community
-            '-t', $TimeoutSeconds.ToString()
-            $TargetIP
-            $OID
-        )
-
-        # Never emit the community string in verbose output. Redact '-c <community>'
-        # to '-c ****'. (The community is still visible in the process argument list
-        # while snmpwalk runs - see the SECURITY note in the function help.)
-        $redactedArgs = @(
-            '-' + $Version.ToLower()
-            '-c', '****'
-            '-t', $TimeoutSeconds.ToString()
-            $TargetIP
-            $OID
-        )
+        $isV3 = $Version.ToLower() -eq 'v3'
+        if ($isV3) {
+            $arguments = @(
+                '-v', '3'
+                '-u', $Community
+                '-t', $TimeoutSeconds.ToString()
+                $TargetIP
+                $OID
+            )
+            $redactedArgs = @(
+                '-v', '3'
+                '-u', '****'
+                '-t', $TimeoutSeconds.ToString()
+                $TargetIP
+                $OID
+            )
+        }
+        else {
+            $arguments = @(
+                '-' + $Version.ToLower()
+                '-c', $Community
+                '-t', $TimeoutSeconds.ToString()
+                $TargetIP
+                $OID
+            )
+            $redactedArgs = @(
+                '-' + $Version.ToLower()
+                '-c', '****'
+                '-t', $TimeoutSeconds.ToString()
+                $TargetIP
+                $OID
+            )
+        }
         Write-Verbose "Running: $snmpWalkCmd $($redactedArgs -join ' ')"
 
         $output = & $snmpWalkCmd @arguments 2>&1

@@ -85,7 +85,9 @@ function Test-DeviceReachability {
                                 $tcp.Dispose()
                                 if ($ok) { $null = $resultsDict.TryAdd($node.IP, $true); continue }
                             } else { $tcp.Dispose() }
-                        } catch {}
+                        } catch {
+                            Write-Verbose "TCP fallback probe failed for $($node.IP):$fallbackPort — $($_.Exception.Message)"
+                        }
                     }
                     $null = $resultsDict.TryAdd($node.IP, $false)
                 }

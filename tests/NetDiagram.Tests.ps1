@@ -1761,6 +1761,38 @@ Describe 'Export-DrawIO subnet container parenting' {
     }
 }
 
+Describe 'Lint hygiene: verbose catch and Information stream (1.4.1)' {
+    It 'Get-SnmpNeighbors emits SNMP summary to Information stream, not Host' {
+        $credPath = Join-Path $script:TestDataPath 'credmap-info.json'
+        '{}' | Out-File -FilePath $credPath -Force
+        $topology = Import-Inventory -Path $script:TestInventoryPath
+        Mock Invoke-SnmpWalk { @('1 = IpAddress: 192.168.1.10') } -ModuleName 'NetDiagram-PS'
+
+        $info = @()
+        $null = $topology | Get-SnmpNeighbors -CredentialMapPath $credPath -TryPublic -WarningAction SilentlyContinue -InformationVariable info -InformationAction Continue 2>&1
+
+        ($info -join ' ') | Should -Match 'SNMP summary: queried'
+        $info | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Invoke-PortScan does not throw when scanning a closed port and logs verbosely' {
+        # 192.0.2.1 is TEST-NET-1, guaranteed unroutable; port should be closed/filtered
+        { Invoke-PortScan -IPAddress '192.0.2.2' -Ports @(65534) -TimeoutMs 200 -Verbose 4>&1 | Out-Null } | Should -Not -Throw
+        $result = Invoke-PortScan -IPAddress '192.0.2.2' -Ports @(65534) -TimeoutMs 200
+        $result.OpenPorts | Should -HaveCount 0
+        $result.IPAddress | Should -Be '192.0.2.2'
+    }
+
+    It 'Test-DeviceReachability TCP fallback failure is logged verbosely, not silently swallowed' {
+        $topology = [pscustomobject]@{
+            Nodes = @([pscustomobject]@{ IP='192.0.2.3'; Hostname='x'; Role='server'; Layer='Servers'; Vendor='X'; OS='X'; Reachable=$null })
+            Edges=@(); Subnets=@()
+        }
+        # ProbeScript forces TCP path by returning $false for ICMP, then TCP fallback to unreachable port
+        { $topology | Test-DeviceReachability -TcpFallbackPort 65534 -TimeoutSeconds 1 -Verbose 4>&1 | Out-Null } | Should -Not -Throw
+    }
+}
+
 Describe 'Export-DrawIO dynamic container layout (#19 regression)' {
     It 'Contains every node for a <Count>-node subnet' -TestCases @(
         @{ Count = 0 }

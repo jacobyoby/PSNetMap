@@ -255,7 +255,7 @@ All SNMP attempts will be logged to verbose output.
 
         Write-Verbose "Discovered $($discoveredEdges.Count) SNMP edges"
         $summaryLine = "SNMP summary: queried $($snmpCounts.queried) answered $($snmpCounts.answered) skippedNoCredential $($snmpCounts.skippedNoCredential) skippedError $($snmpCounts.skippedError) skippedNoData $($snmpCounts.skippedNoData)"
-        Write-Host $summaryLine
+        Write-Information $summaryLine -Tags 'NetDiagram'
         Write-Verbose $summaryLine
 
         if ($TryPublic -and $publicAttempts -gt 0) {

@@ -85,7 +85,7 @@ function Invoke-PortScan {
                             }
                         }
                         catch {
-                            # Banner grab failed, that's OK
+                            Write-Verbose "Banner grab failed for ${ip}:$port — $($_.Exception.Message)"
                         }
                     }
 
@@ -99,7 +99,7 @@ function Invoke-PortScan {
                     Write-Verbose "  Port $port - Open"
                 }
                 catch {
-                    # Port closed or filtered
+                    Write-Verbose "Port $port on $ip closed or filtered — $($_.Exception.Message)"
                 }
                 finally {
                     if ($connectResult -and $connectResult.AsyncWaitHandle) {
